@@ -1,0 +1,45 @@
+# MIGlet Configuration Example
+# This file can be used as a template for your MIGlet configuration
+
+pool_id: "pool-123"
+vm_id: "vm-456"
+org_id: "org-789"
+
+controller:
+  endpoint: "https://controller.monkci.io"
+  auth:
+    type: "bearer"
+    token_path: "/var/run/secrets/controller-token"
+  timeout: 30s
+  retry:
+    max_attempts: 5
+    initial_backoff: 1s
+    max_backoff: 30s
+
+github:
+  # Note: MIGlet does NOT store GitHub App credentials (App ID, private key, installation ID)
+  # These are managed by MIG Controller, which generates registration tokens on demand
+  org: "myorg"
+  runner_group: "default"
+  labels: ["self-hosted", "linux", "x64"]
+  token_source: "controller"  # Request token from MIG Controller (recommended)
+  registration_timeout: 60s
+
+heartbeat:
+  interval: 15s
+  timeout: 60s
+
+shutdown:
+  grace_period: 30s
+  force_after: 5m
+
+logging:
+  level: "info"
+  format: "json"
+  redact_secrets: true
+
+metrics:
+  collection_interval: 10s
+  include_disk: true
+  include_network: true
+
