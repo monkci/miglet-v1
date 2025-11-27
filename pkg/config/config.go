@@ -217,15 +217,17 @@ func validate(cfg *Config) error {
 	if cfg.VMID == "" {
 		return fmt.Errorf("vm_id is required")
 	}
-	if cfg.OrgID == "" {
-		return fmt.Errorf("org_id is required")
-	}
+	// org_id is optional - MIGlet is ephemeral and may not have org context at boot
+	// if cfg.OrgID == "" {
+	// 	return fmt.Errorf("org_id is required")
+	// }
 	if cfg.Controller.Endpoint == "" {
 		return fmt.Errorf("controller.endpoint is required")
 	}
-	if cfg.GitHub.Org == "" {
-		return fmt.Errorf("github.org is required")
-	}
+	// github.org is optional - may be provided later via controller
+	// if cfg.GitHub.Org == "" {
+	// 	return fmt.Errorf("github.org is required")
+	// }
 	return nil
 }
 
