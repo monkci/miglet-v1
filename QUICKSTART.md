@@ -46,7 +46,7 @@ gcloud compute ssh <instance-name> --zone <zone>
 
 # Set environment variables
 export MIGLET_POOL_ID="gcp-pool-001"
-export MIGLET_VM_ID="gcp-vm-$(hostname)"
+export MIGLET_VM_ID="gcp-vm-miglet-v1"
 export MIGLET_ORG_ID="gcp-org-001"
 export MIGLET_CONTROLLER_ENDPOINT="https://controller.monkci.io"
 export MIGLET_GITHUB_ORG="your-org"

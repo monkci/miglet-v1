@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -100,9 +101,61 @@ func Load(configPath string) (*Config, error) {
 	setDefaults(v)
 
 	// Load from environment variables
-	v.SetEnvPrefix("MIGLET")
-	v.AutomaticEnv()
-	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	// Read env vars directly and set in viper to ensure they're picked up
+	// This works around viper's AutomaticEnv limitations with Unmarshal
+	if val := os.Getenv("MIGLET_POOL_ID"); val != "" {
+		v.Set("pool_id", val)
+	}
+	if val := os.Getenv("MIGLET_VM_ID"); val != "" {
+		v.Set("vm_id", val)
+	}
+	if val := os.Getenv("MIGLET_ORG_ID"); val != "" {
+		v.Set("org_id", val)
+	}
+	if val := os.Getenv("MIGLET_CONTROLLER_ENDPOINT"); val != "" {
+		v.Set("controller.endpoint", val)
+	}
+	if val := os.Getenv("MIGLET_CONTROLLER_AUTH_TYPE"); val != "" {
+		v.Set("controller.auth.type", val)
+	}
+	if val := os.Getenv("MIGLET_CONTROLLER_AUTH_TOKEN_PATH"); val != "" {
+		v.Set("controller.auth.token_path", val)
+	}
+	if val := os.Getenv("MIGLET_CONTROLLER_TIMEOUT"); val != "" {
+		v.Set("controller.timeout", val)
+	}
+	if val := os.Getenv("MIGLET_GITHUB_ORG"); val != "" {
+		v.Set("github.org", val)
+	}
+	if val := os.Getenv("MIGLET_GITHUB_RUNNER_GROUP"); val != "" {
+		v.Set("github.runner_group", val)
+	}
+	if val := os.Getenv("MIGLET_GITHUB_LABELS"); val != "" {
+		// Labels can be comma-separated
+		labels := strings.Split(val, ",")
+		for i, label := range labels {
+			labels[i] = strings.TrimSpace(label)
+		}
+		v.Set("github.labels", labels)
+	}
+	if val := os.Getenv("MIGLET_GITHUB_TOKEN_SOURCE"); val != "" {
+		v.Set("github.token_source", val)
+	}
+	if val := os.Getenv("MIGLET_GITHUB_METADATA_PATH"); val != "" {
+		v.Set("github.metadata_path", val)
+	}
+	if val := os.Getenv("MIGLET_GITHUB_REGISTRATION_TIMEOUT"); val != "" {
+		v.Set("github.registration_timeout", val)
+	}
+	if val := os.Getenv("MIGLET_LOGGING_LEVEL"); val != "" {
+		v.Set("logging.level", val)
+	}
+	if val := os.Getenv("MIGLET_LOGGING_FORMAT"); val != "" {
+		v.Set("logging.format", val)
+	}
+	if val := os.Getenv("MIGLET_LOGGING_REDACT_SECRETS"); val != "" {
+		v.Set("logging.redact_secrets", val == "true" || val == "1")
+	}
 
 	// Load from config file if provided
 	if configPath != "" {
