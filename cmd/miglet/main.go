@@ -33,8 +33,20 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Initialize logger first
-	logger.Init(*logLevel, *logFormat)
+	// Determine log format - check env var first, then flag
+	finalLogFormat := *logFormat
+	if envFormat := os.Getenv("MIGLET_LOGGING_FORMAT"); envFormat != "" {
+		finalLogFormat = envFormat
+	}
+
+	// Determine log level - check env var first, then flag
+	finalLogLevel := *logLevel
+	if envLevel := os.Getenv("MIGLET_LOGGING_LEVEL"); envLevel != "" {
+		finalLogLevel = envLevel
+	}
+
+	// Initialize logger with determined values
+	logger.Init(finalLogLevel, finalLogFormat)
 	log := logger.Get()
 
 	log.WithFields(map[string]interface{}{
