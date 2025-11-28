@@ -26,7 +26,7 @@ func NewManager(runnerPath string) *Manager {
 // Returns error if configuration fails
 func (m *Manager) ConfigureRunner(token, runnerURL, runnerGroup string, labels []string) error {
 	configScript := filepath.Join(m.runnerPath, "config.sh")
-	
+
 	// Check if config script exists
 	if _, err := os.Stat(configScript); os.IsNotExist(err) {
 		return fmt.Errorf("runner config script not found at %s: %w", configScript, err)
@@ -43,7 +43,7 @@ func (m *Manager) ConfigureRunner(token, runnerURL, runnerGroup string, labels [
 	args := []string{
 		"--url", runnerURL,
 		"--token", token,
-		"--ephemeral", // Ephemeral runner
+		"--ephemeral",  // Ephemeral runner
 		"--unattended", // Non-interactive mode
 		"--replace",    // Replace existing configuration
 	}
@@ -81,20 +81,20 @@ func (m *Manager) ConfigureRunner(token, runnerURL, runnerGroup string, labels [
 	return nil
 }
 
-// StartRunner starts the runner process
-// Returns the command and error
-func (m *Manager) StartRunner() (*exec.Cmd, error) {
+// StartRunner starts the runner process with log capture
+// Returns the command, monitor, and error
+func (m *Manager) StartRunner(monitor *Monitor) (*exec.Cmd, *Monitor, error) {
 	runScript := filepath.Join(m.runnerPath, "run.sh")
-	
+
 	// Check if run script exists
 	if _, err := os.Stat(runScript); os.IsNotExist(err) {
-		return nil, fmt.Errorf("runner run script not found at %s: %w", runScript, err)
+		return nil, nil, fmt.Errorf("runner run script not found at %s: %w", runScript, err)
 	}
 
 	// Check if runner is configured
 	runnerFile := filepath.Join(m.runnerPath, ".runner")
 	if _, err := os.Stat(runnerFile); os.IsNotExist(err) {
-		return nil, fmt.Errorf("runner not configured: .runner file not found")
+		return nil, nil, fmt.Errorf("runner not configured: .runner file not found")
 	}
 
 	logger.Get().WithField("runner_path", m.runnerPath).Info("Starting GitHub Actions runner")
@@ -102,14 +102,32 @@ func (m *Manager) StartRunner() (*exec.Cmd, error) {
 	// Create command to run the runner
 	cmd := exec.Command(runScript)
 	cmd.Dir = m.runnerPath
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+
+	// Create pipes for stdout and stderr
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create stderr pipe: %w", err)
+	}
+
+	// Start log capture
+	if monitor == nil {
+		monitor = NewMonitor()
+	}
+
+	// Capture stdout and stderr
+	go monitor.CaptureLogs(stdoutPipe, "stdout")
+	go monitor.CaptureLogs(stderrPipe, "stderr")
 
 	// Set environment variables if needed
 	cmd.Env = os.Environ()
 
-	logger.Get().Debug("Runner process command created")
-	return cmd, nil
+	logger.Get().Debug("Runner process command created with log capture")
+	return cmd, monitor, nil
 }
 
 // StopRunner stops the runner process
@@ -119,7 +137,7 @@ func (m *Manager) StopRunner(cmd *exec.Cmd) error {
 	}
 
 	logger.Get().Info("Stopping GitHub Actions runner")
-	
+
 	// Try graceful shutdown first
 	if err := cmd.Process.Signal(os.Interrupt); err != nil {
 		logger.Get().WithError(err).Warn("Failed to send interrupt signal, trying kill")
@@ -142,4 +160,3 @@ func (m *Manager) IsConfigured() bool {
 func (m *Manager) GetRunnerPath() string {
 	return m.runnerPath
 }
-

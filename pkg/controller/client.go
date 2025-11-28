@@ -202,3 +202,81 @@ type RegistrationTokenResponse struct {
 	RunnerGroup       string    `json:"runner_group"`
 	Labels            []string  `json:"labels"`
 }
+
+// SendEvent sends an event to the controller
+func (c *Client) SendEvent(ctx context.Context, event interface{}) error {
+	log := logger.WithContext(c.vmID, "", "")
+
+	// Marshal event to JSON
+	body, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("failed to marshal event: %w", err)
+	}
+
+	// Create request
+	url := fmt.Sprintf("%s/api/v1/vms/%s/events", c.endpoint, c.vmID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+
+	// Send request
+	log.Debug("Sending event to controller")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check status code
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
+// SendHeartbeat sends a heartbeat to the controller
+func (c *Client) SendHeartbeat(ctx context.Context, heartbeat *events.HeartbeatEvent) error {
+	log := logger.WithContext(c.vmID, heartbeat.PoolID, heartbeat.OrgID)
+
+	// Marshal heartbeat to JSON
+	body, err := json.Marshal(heartbeat)
+	if err != nil {
+		return fmt.Errorf("failed to marshal heartbeat: %w", err)
+	}
+
+	// Create request
+	url := fmt.Sprintf("%s/api/v1/vms/%s/heartbeat", c.endpoint, c.vmID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+
+	// Send request
+	log.Debug("Sending heartbeat to controller")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check status code
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}

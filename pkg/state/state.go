@@ -10,6 +10,7 @@ import (
 	"github.com/monkci/miglet/pkg/controller"
 	"github.com/monkci/miglet/pkg/events"
 	"github.com/monkci/miglet/pkg/logger"
+	"github.com/monkci/miglet/pkg/metrics"
 	"github.com/monkci/miglet/pkg/runner"
 )
 
@@ -35,25 +36,29 @@ type StateMachine struct {
 	eventEmitter       *events.Emitter
 	ctx                context.Context
 	cancel             context.CancelFunc
-	vmStartedEventSent bool      // Track if VM started event has been sent
-	registrationToken  string    // Registration token received from controller
-	runnerURL          string    // Runner URL for registration
-	runnerGroup        string    // Runner group
-	runnerLabels       []string  // Runner labels
-	runnerPath         string    // Path to installed runner
-	runnerCmd          *exec.Cmd // Runner process command
+	vmStartedEventSent bool               // Track if VM started event has been sent
+	registrationToken  string             // Registration token received from controller
+	runnerURL          string             // Runner URL for registration
+	runnerGroup        string             // Runner group
+	runnerLabels       []string           // Runner labels
+	runnerPath         string             // Path to installed runner
+	runnerCmd          *exec.Cmd          // Runner process command
+	runnerMonitor      *runner.Monitor    // Runner monitor for logs/state
+	metricsCollector   *metrics.Collector // Metrics collector
+	lastHeartbeat      time.Time          // Last heartbeat time
 }
 
 // NewStateMachine creates a new state machine
 func NewStateMachine(cfg *config.Config, ctrl *controller.Client, emitter *events.Emitter) *StateMachine {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &StateMachine{
-		currentState: StateInitializing,
-		config:       cfg,
-		controller:   ctrl,
-		eventEmitter: emitter,
-		ctx:          ctx,
-		cancel:       cancel,
+		currentState:     StateInitializing,
+		config:           cfg,
+		controller:       ctrl,
+		eventEmitter:     emitter,
+		ctx:              ctx,
+		cancel:           cancel,
+		metricsCollector: metrics.NewCollector(),
 	}
 }
 
@@ -116,14 +121,14 @@ func (sm *StateMachine) executeState() error {
 	case StateRegisteringRunner:
 		return sm.handleRegisteringRunner()
 	case StateIdle:
-		// Runner is running, just wait and monitor
+		// Runner is running, send heartbeats periodically
 		// The runner process is monitored in a separate goroutine
 		select {
 		case <-sm.ctx.Done():
 			return nil
-		case <-time.After(10 * time.Second):
-			// Runner is monitored in separate goroutine via cmd.Wait()
-			// Just continue waiting here
+		case <-time.After(sm.config.Heartbeat.Interval):
+			// Send heartbeat
+			sm.sendHeartbeat()
 			return nil
 		}
 	case StateError:
@@ -323,9 +328,14 @@ func (sm *StateMachine) handleRegisteringRunner() error {
 		return nil
 	}
 
-	// Start runner process
+	// Create runner monitor
+	monitor := runner.NewMonitor()
+	sm.setupRunnerCallbacks(monitor)
+	sm.runnerMonitor = monitor
+
+	// Start runner process with log capture
 	log.Info("Starting runner process")
-	runnerCmd, err := runnerMgr.StartRunner()
+	runnerCmd, monitor, err := runnerMgr.StartRunner(monitor)
 	if err != nil {
 		log.WithError(err).Error("Failed to start runner")
 		sm.Transition(StateError)
@@ -344,6 +354,19 @@ func (sm *StateMachine) handleRegisteringRunner() error {
 
 	log.WithField("pid", runnerCmd.Process.Pid).Info("GitHub Actions runner started successfully")
 
+	// Send runner registered event
+	registeredEvent := events.NewRunnerRegisteredEvent(
+		sm.config.VMID,
+		sm.config.PoolID,
+		sm.config.OrgID,
+		sm.runnerURL,
+	)
+	registeredEvent.Labels = sm.runnerLabels
+	registeredEvent.RunnerGroup = sm.runnerGroup
+	if err := sm.controller.SendEvent(sm.ctx, registeredEvent); err != nil {
+		log.WithError(err).Warn("Failed to send runner registered event")
+	}
+
 	// Monitor runner process in a goroutine
 	go sm.monitorRunner(runnerCmd)
 
@@ -351,6 +374,102 @@ func (sm *StateMachine) handleRegisteringRunner() error {
 	log.Info("Runner registered and running, transitioning to idle")
 	sm.Transition(StateIdle)
 	return nil
+}
+
+// setupRunnerCallbacks sets up callbacks for runner state changes
+func (sm *StateMachine) setupRunnerCallbacks(monitor *runner.Monitor) {
+	log := logger.WithContext(sm.config.VMID, sm.config.PoolID, sm.config.OrgID)
+
+	// State change callback
+	monitor.SetStateChangeCallback(func(state events.RunnerState) {
+		log.WithField("runner_state", state).Info("Runner state changed")
+	})
+
+	// Job start callback
+	monitor.SetJobCallbacks(
+		func(jobID, runID string) {
+			log.WithFields(map[string]interface{}{
+				"job_id": jobID,
+				"run_id": runID,
+			}).Info("Job started")
+
+			// Send job started event
+			jobEvent := events.NewJobStartedEvent(
+				sm.config.VMID,
+				sm.config.PoolID,
+				sm.config.OrgID,
+				jobID,
+				runID,
+			)
+			if err := sm.controller.SendEvent(sm.ctx, jobEvent); err != nil {
+				log.WithError(err).Warn("Failed to send job started event")
+			}
+		},
+		func(jobID, runID string, success bool) {
+			log.WithFields(map[string]interface{}{
+				"job_id":  jobID,
+				"run_id":  runID,
+				"success": success,
+			}).Info("Job completed")
+
+			// Send job completed event
+			jobEvent := events.NewJobCompletedEvent(
+				sm.config.VMID,
+				sm.config.PoolID,
+				sm.config.OrgID,
+				jobID,
+				runID,
+				success,
+			)
+			if err := sm.controller.SendEvent(sm.ctx, jobEvent); err != nil {
+				log.WithError(err).Warn("Failed to send job completed event")
+			}
+		},
+	)
+}
+
+// sendHeartbeat sends a heartbeat to the controller
+func (sm *StateMachine) sendHeartbeat() {
+	log := logger.WithContext(sm.config.VMID, sm.config.PoolID, sm.config.OrgID)
+
+	// Collect VM health metrics
+	vmHealth := sm.metricsCollector.CollectVMHealth()
+
+	// Get runner state
+	runnerState := events.RunnerStateIdle
+	var currentJob *events.JobInfo
+	if sm.runnerMonitor != nil {
+		runnerState = sm.runnerMonitor.GetState()
+		jobID, runID := sm.runnerMonitor.GetCurrentJob()
+		if jobID != "" {
+			currentJob = &events.JobInfo{
+				JobID:     jobID,
+				RunID:     runID,
+				StartedAt: time.Now(), // TODO: Track actual start time
+			}
+		}
+	}
+
+	// Create heartbeat event
+	heartbeat := events.NewHeartbeatEvent(
+		sm.config.VMID,
+		sm.config.PoolID,
+		sm.config.OrgID,
+		vmHealth,
+		runnerState,
+		currentJob,
+	)
+
+	// Send heartbeat
+	if err := sm.controller.SendHeartbeat(sm.ctx, heartbeat); err != nil {
+		log.WithError(err).Warn("Failed to send heartbeat")
+	} else {
+		log.Debug("Heartbeat sent successfully")
+		sm.lastHeartbeat = time.Now()
+		if sm.runnerMonitor != nil {
+			sm.runnerMonitor.UpdateLastHeartbeat()
+		}
+	}
 }
 
 // monitorRunner monitors the runner process and handles crashes
@@ -361,8 +480,22 @@ func (sm *StateMachine) monitorRunner(cmd *exec.Cmd) {
 	err := cmd.Wait()
 	if err != nil {
 		log.WithError(err).Error("Runner process exited with error")
-		// TODO: Emit runner crashed event
-		// For now, transition to error state
+
+		// Send runner crashed event
+		crashedEvent := &events.Event{
+			Type:      events.EventTypeRunnerCrashed,
+			Timestamp: time.Now(),
+			VMID:      sm.config.VMID,
+			PoolID:    sm.config.PoolID,
+			OrgID:     sm.config.OrgID,
+			Metadata: map[string]interface{}{
+				"error": err.Error(),
+			},
+		}
+		if sendErr := sm.controller.SendEvent(sm.ctx, crashedEvent); sendErr != nil {
+			log.WithError(sendErr).Warn("Failed to send runner crashed event")
+		}
+
 		sm.Transition(StateError)
 	} else {
 		log.Info("Runner process exited normally")
