@@ -23,7 +23,7 @@ func main() {
 	var (
 		configPath  = flag.String("config", "", "Path to configuration file")
 		logLevel    = flag.String("log-level", "info", "Log level (debug, info, warn, error)")
-		logFormat   = flag.String("log-format", "json", "Log format (json, text)")
+		logFormat   = flag.String("log-format", "text", "Log format (json, text)")
 		showVersion = flag.Bool("version", false, "Show version and exit")
 	)
 	flag.Parse()
