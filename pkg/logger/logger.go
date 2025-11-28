@@ -32,8 +32,14 @@ func Init(level string, format string) {
 			TimestampFormat: "2006-01-02T15:04:05.000Z07:00",
 		})
 	} else {
+		// Use colored text formatter for better readability
 		log.SetFormatter(&logrus.TextFormatter{
-			FullTimestamp: true,
+			ForceColors:     true,
+			DisableColors:   false,
+			FullTimestamp:   true,
+			TimestampFormat: "15:04:05",
+			DisableSorting:  false,
+			PadLevelText:    true,
 		})
 	}
 

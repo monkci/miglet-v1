@@ -41,8 +41,8 @@ The controller will:
 
 Set environment variables:
 ```bash
-export MIGLET_POOL_ID="test-pool-001"
-export MIGLET_VM_ID="test-vm-001"
+export MIGLET_POOL_ID="test-pool-001111"
+export MIGLET_VM_ID="test-vm-001111"
 export MIGLET_CONTROLLER_ENDPOINT="http://localhost:8080"
 export MIGLET_LOGGING_LEVEL="debug"
 export MIGLET_LOGGING_FORMAT="text"
