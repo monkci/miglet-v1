@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -47,13 +48,16 @@ func handleVMRequests(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Request: %s %s", r.Method, path)
 
 	// Parse VM ID (simple extraction)
+	// Path format: /api/v1/vms/{vm_id}/events or /api/v1/vms/{vm_id}/heartbeat, etc.
 	var vmID string
-	if len(path) > 15 { // /api/v1/vms/ is 15 chars
-		remaining := path[15:]
-		// Find next slash
+	prefix := "/api/v1/vms/"
+	if len(path) > len(prefix) {
+		remaining := path[len(prefix):]
+		// Find next slash to get VM ID
 		if idx := findNextSlash(remaining); idx > 0 {
 			vmID = remaining[:idx]
 		} else {
+			// No slash found, entire remaining is VM ID (shouldn't happen for our endpoints)
 			vmID = remaining
 		}
 	}
@@ -63,17 +67,18 @@ func handleVMRequests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Route based on path
-	if r.URL.Path == fmt.Sprintf("/api/v1/vms/%s/registration-token", vmID) {
+	// Route based on path suffix
+	if strings.HasSuffix(path, "/registration-token") {
 		handleRegistrationToken(w, r, vmID)
-	} else if r.URL.Path == fmt.Sprintf("/api/v1/vms/%s/events", vmID) {
+	} else if strings.HasSuffix(path, "/events") {
 		handleEvents(w, r, vmID)
-	} else if r.URL.Path == fmt.Sprintf("/api/v1/vms/%s/heartbeat", vmID) {
+	} else if strings.HasSuffix(path, "/heartbeat") {
 		handleHeartbeat(w, r, vmID)
-	} else if r.URL.Path == fmt.Sprintf("/api/v1/vms/%s/commands", vmID) {
+	} else if strings.HasSuffix(path, "/commands") {
 		handleCommands(w, r, vmID)
 	} else {
-		http.Error(w, "Unknown endpoint", http.StatusNotFound)
+		log.Printf("Unknown endpoint: %s (VM ID: %s)", path, vmID)
+		http.Error(w, fmt.Sprintf("Unknown endpoint: %s", path), http.StatusNotFound)
 	}
 }
 

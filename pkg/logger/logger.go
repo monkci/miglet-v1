@@ -33,13 +33,14 @@ func Init(level string, format string) {
 		})
 	} else {
 		// Use colored text formatter for better readability
+		// Logrus will automatically detect if output is a TTY and enable colors
 		log.SetFormatter(&logrus.TextFormatter{
-			ForceColors:     true,
-			DisableColors:   false,
-			FullTimestamp:   true,
-			TimestampFormat: "15:04:05",
-			DisableSorting:  false,
-			PadLevelText:    true,
+			FullTimestamp:    true,
+			TimestampFormat:  "15:04:05",
+			DisableSorting:   false,
+			PadLevelText:     true,
+			QuoteEmptyFields: false,
+			// Colors will be enabled automatically if output is a TTY
 		})
 	}
 
