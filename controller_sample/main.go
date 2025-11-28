@@ -67,17 +67,23 @@ func handleVMRequests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("Extracted VM ID: %s from path: %s", vmID, path)
+
 	// Route based on path suffix
 	if strings.HasSuffix(path, "/registration-token") {
+		log.Printf("Routing to registration-token handler")
 		handleRegistrationToken(w, r, vmID)
 	} else if strings.HasSuffix(path, "/events") {
+		log.Printf("Routing to events handler")
 		handleEvents(w, r, vmID)
 	} else if strings.HasSuffix(path, "/heartbeat") {
+		log.Printf("Routing to heartbeat handler")
 		handleHeartbeat(w, r, vmID)
 	} else if strings.HasSuffix(path, "/commands") {
+		log.Printf("Routing to commands handler")
 		handleCommands(w, r, vmID)
 	} else {
-		log.Printf("Unknown endpoint: %s (VM ID: %s)", path, vmID)
+		log.Printf("Unknown endpoint: %s (VM ID: %s, HasSuffix /events: %v)", path, vmID, strings.HasSuffix(path, "/events"))
 		http.Error(w, fmt.Sprintf("Unknown endpoint: %s", path), http.StatusNotFound)
 	}
 }

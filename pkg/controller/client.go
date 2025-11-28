@@ -49,7 +49,7 @@ func NewClient(cfg *config.Config) (*Client, error) {
 // Returns true if acknowledgment received, false otherwise
 func (c *Client) SendVMStartedEvent(ctx context.Context, event *events.VMStartedEvent) (bool, error) {
 	log := logger.WithContext(c.vmID, event.PoolID, event.OrgID)
-	
+
 	// Marshal event to JSON
 	body, err := json.Marshal(event)
 	if err != nil {
@@ -89,10 +89,10 @@ func (c *Client) SendVMStartedEvent(ctx context.Context, event *events.VMStarted
 
 	// Parse response
 	var ackResponse struct {
-		Status  string `json:"status"`
-		VMID    string `json:"vm_id"`
-		Message string `json:"message"`
-		Acknowledged bool `json:"acknowledged,omitempty"`
+		Status       string `json:"status"`
+		VMID         string `json:"vm_id"`
+		Message      string `json:"message"`
+		Acknowledged bool   `json:"acknowledged,omitempty"`
 	}
 
 	if err := json.Unmarshal(respBody, &ackResponse); err != nil {
@@ -112,7 +112,7 @@ func (c *Client) SendVMStartedEvent(ctx context.Context, event *events.VMStarted
 // RequestRegistrationToken requests a registration token from the controller
 func (c *Client) RequestRegistrationToken(ctx context.Context, req *RegistrationTokenRequest) (*RegistrationTokenResponse, error) {
 	log := logger.WithContext(c.vmID, req.PoolID, "")
-	
+
 	// Marshal request to JSON
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -175,4 +175,3 @@ type RegistrationTokenResponse struct {
 	RunnerGroup       string    `json:"runner_group"`
 	Labels            []string  `json:"labels"`
 }
-

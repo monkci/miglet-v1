@@ -2,12 +2,14 @@ package state
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"github.com/monkci/miglet/pkg/config"
 	"github.com/monkci/miglet/pkg/controller"
 	"github.com/monkci/miglet/pkg/events"
 	"github.com/monkci/miglet/pkg/logger"
+	"github.com/monkci/miglet/pkg/runner"
 )
 
 // State represents the current state of MIGlet
@@ -134,8 +136,37 @@ func (sm *StateMachine) handleInitializing() error {
 	log := logger.WithContext(sm.config.VMID, sm.config.PoolID, sm.config.OrgID)
 	log.Info("Initializing MIGlet")
 
+	// Determine base directory for runner installation
+	// Use /tmp/miglet-runner or current directory if /tmp is not writable
+	baseDir := "/tmp/miglet-runner"
+	if _, err := os.Stat(baseDir); err != nil {
+		// Try to create it, if it fails, use current directory
+		if err := os.MkdirAll(baseDir, 0755); err != nil {
+			log.WithError(err).Warn("Failed to create /tmp/miglet-runner, using current directory")
+			baseDir = "."
+		}
+	}
+
+	// Install GitHub Actions runner
+	log.Info("Installing GitHub Actions runner")
+	installer := runner.NewInstaller(baseDir)
+	if err := installer.Install(); err != nil {
+		log.WithError(err).Error("Failed to install GitHub Actions runner")
+		// For now, we'll continue even if installation fails
+		// In production, you might want to fail here
+		log.Warn("Continuing despite runner installation failure")
+	} else {
+		runnerPath := installer.GetRunnerPath()
+		log.WithFields(map[string]interface{}{
+			"runner_path": runnerPath,
+			"version":     runner.GetRunnerVersion(),
+		}).Info("GitHub Actions runner installed and ready")
+	}
+
 	// Validate prerequisites (Docker, network, etc.)
-	// For now, just transition to waiting for controller
+	// TODO: Add Docker check, network connectivity check, etc.
+
+	// Transition to waiting for controller
 	sm.Transition(StateWaitingForController)
 	return nil
 }
