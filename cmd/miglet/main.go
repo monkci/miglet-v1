@@ -8,7 +8,10 @@ import (
 	"syscall"
 
 	"github.com/monkci/miglet/pkg/config"
+	"github.com/monkci/miglet/pkg/controller"
+	"github.com/monkci/miglet/pkg/events"
 	"github.com/monkci/miglet/pkg/logger"
+	"github.com/monkci/miglet/pkg/state"
 )
 
 var (
@@ -18,9 +21,9 @@ var (
 
 func main() {
 	var (
-		configPath = flag.String("config", "", "Path to configuration file")
-		logLevel   = flag.String("log-level", "info", "Log level (debug, info, warn, error)")
-		logFormat  = flag.String("log-format", "json", "Log format (json, text)")
+		configPath  = flag.String("config", "", "Path to configuration file")
+		logLevel    = flag.String("log-level", "info", "Log level (debug, info, warn, error)")
+		logFormat   = flag.String("log-format", "json", "Log format (json, text)")
 		showVersion = flag.Bool("version", false, "Show version and exit")
 	)
 	flag.Parse()
@@ -56,16 +59,42 @@ func main() {
 	ctxLog := logger.WithContext(cfg.VMID, cfg.PoolID, cfg.OrgID)
 	ctxLog.Info("MIGlet initialized with context")
 
+	// Create MIG Controller client
+	ctrlClient, err := controller.NewClient(cfg)
+	if err != nil {
+		ctxLog.WithError(err).Fatal("Failed to create controller client")
+	}
+
+	// Create event emitter
+	eventEmitter := events.NewEmitter()
+
+	// Create state machine
+	stateMachine := state.NewStateMachine(cfg, ctrlClient, eventEmitter)
+
 	// Set up signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// For now, just wait for shutdown signal
-	// In future phases, we'll add the actual state machine here
-	ctxLog.Info("MIGlet ready (Phase 1 - basic setup only)")
-	ctxLog.Info("Waiting for shutdown signal...")
+	// Run state machine in goroutine
+	stateMachineDone := make(chan error, 1)
+	go func() {
+		stateMachineDone <- stateMachine.Run()
+	}()
 
-	<-sigChan
-	ctxLog.Info("Shutdown signal received, exiting")
+	ctxLog.Info("MIGlet state machine started")
+
+	// Wait for shutdown signal or state machine error
+	select {
+	case err := <-stateMachineDone:
+		if err != nil {
+			ctxLog.WithError(err).Error("State machine exited with error")
+			os.Exit(1)
+		}
+		ctxLog.Info("State machine completed")
+	case sig := <-sigChan:
+		ctxLog.WithField("signal", sig.String()).Info("Shutdown signal received")
+		stateMachine.Shutdown()
+		<-stateMachineDone
+		ctxLog.Info("MIGlet shutdown complete")
+	}
 }
-

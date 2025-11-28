@@ -157,10 +157,35 @@ func handleEvents(w http.ResponseWriter, r *http.Request, vmID string) {
 	storeData(vmID, fmt.Sprintf("event-%s", eventType), body)
 
 	// Send acknowledgment
+	// For vm_started events, explicitly acknowledge (this is what MIGlet waits for)
+	if eventType == "vm_started" {
+		poolID, _ := event["pool_id"].(string)
+		orgID, _ := event["org_id"].(string)
+		log.Printf("Acknowledging VM started event - VM: %s, Pool: %s, Org: %s", vmID, poolID, orgID)
+
+		// Send explicit acknowledgment for VM started events
+		response := map[string]interface{}{
+			"status":       "acknowledged", // MIGlet checks for "acknowledged" or "received"
+			"acknowledged": true,           // Explicit flag
+			"vm_id":        vmID,
+			"pool_id":      poolID,
+			"org_id":       orgID,
+			"message":      "VM started event acknowledged",
+			"timestamp":    time.Now().Format(time.RFC3339),
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// For other events, send generic acknowledgment
 	response := map[string]interface{}{
-		"status":  "received",
-		"vm_id":   vmID,
-		"message": "Event received and stored",
+		"status":       "received",
+		"acknowledged": false,
+		"vm_id":        vmID,
+		"message":      "Event received and stored",
 	}
 
 	w.Header().Set("Content-Type", "application/json")
