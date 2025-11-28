@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"os"
+	"os/exec"
 	"time"
 
 	"github.com/monkci/miglet/pkg/config"
@@ -34,7 +35,13 @@ type StateMachine struct {
 	eventEmitter       *events.Emitter
 	ctx                context.Context
 	cancel             context.CancelFunc
-	vmStartedEventSent bool // Track if VM started event has been sent
+	vmStartedEventSent bool      // Track if VM started event has been sent
+	registrationToken  string    // Registration token received from controller
+	runnerURL          string    // Runner URL for registration
+	runnerGroup        string    // Runner group
+	runnerLabels       []string  // Runner labels
+	runnerPath         string    // Path to installed runner
+	runnerCmd          *exec.Cmd // Runner process command
 }
 
 // NewStateMachine creates a new state machine
@@ -107,17 +114,16 @@ func (sm *StateMachine) executeState() error {
 	case StateWaitingForController:
 		return sm.handleWaitingForController()
 	case StateRegisteringRunner:
-		// TODO: Phase 3
-		return nil
+		return sm.handleRegisteringRunner()
 	case StateIdle:
-		// In Phase 2, idle state just waits
-		// Phase 3 will implement runner registration
-		// For now, sleep to prevent tight loop
+		// Runner is running, just wait and monitor
+		// The runner process is monitored in a separate goroutine
 		select {
 		case <-sm.ctx.Done():
 			return nil
-		case <-time.After(5 * time.Second):
-			// Just wait, don't do anything yet
+		case <-time.After(10 * time.Second):
+			// Runner is monitored in separate goroutine via cmd.Wait()
+			// Just continue waiting here
 			return nil
 		}
 	case StateError:
@@ -157,6 +163,7 @@ func (sm *StateMachine) handleInitializing() error {
 		log.Warn("Continuing despite runner installation failure")
 	} else {
 		runnerPath := installer.GetRunnerPath()
+		sm.runnerPath = runnerPath
 		log.WithFields(map[string]interface{}{
 			"runner_path": runnerPath,
 			"version":     runner.GetRunnerVersion(),
@@ -222,14 +229,32 @@ func (sm *StateMachine) handleWaitingForController() error {
 		}
 
 		// Send event to controller
-		ack, err := sm.controller.SendVMStartedEvent(sm.ctx, vmStartedEvent)
+		ackResponse, err := sm.controller.SendVMStartedEvent(sm.ctx, vmStartedEvent)
 		if err != nil {
 			log.WithError(err).WithField("attempt", attempt+1).Warn("Failed to send VM started event")
 			continue
 		}
 
-		if ack {
+		if ackResponse != nil && (ackResponse.Acknowledged || ackResponse.Status == "acknowledged" || ackResponse.Status == "received") {
 			log.Info("Controller acknowledged VM started event")
+
+			// Store registration token and runner config from acknowledgment
+			if ackResponse.RegistrationToken != "" {
+				sm.registrationToken = ackResponse.RegistrationToken
+				sm.runnerURL = ackResponse.RunnerURL
+				sm.runnerGroup = ackResponse.RunnerGroup
+				sm.runnerLabels = ackResponse.Labels
+
+				log.WithFields(map[string]interface{}{
+					"token_length": len(ackResponse.RegistrationToken),
+					"runner_url":   ackResponse.RunnerURL,
+					"runner_group": ackResponse.RunnerGroup,
+					"labels":       ackResponse.Labels,
+				}).Info("Received registration token and runner config")
+			} else {
+				log.Warn("Controller acknowledged but did not provide registration token")
+			}
+
 			ackReceived = true
 			break
 		}
@@ -241,18 +266,124 @@ func (sm *StateMachine) handleWaitingForController() error {
 		return nil // Don't return error, just transition to error state
 	}
 
-	// Transition to next state (will be RegisteringRunner in Phase 3)
-	// For now, transition to Idle to indicate we're waiting for next phase
-	log.Info("Controller acknowledgment received, transitioning to idle (Phase 2 complete)")
-	sm.Transition(StateIdle)
-
-	// In Idle state, we'll just wait (Phase 3 will implement runner registration)
+	// Transition to registering runner state
+	log.Info("Controller acknowledgment received, transitioning to registering runner")
+	sm.Transition(StateRegisteringRunner)
 	return nil
+}
+
+// GetRegistrationToken returns the registration token received from controller
+func (sm *StateMachine) GetRegistrationToken() string {
+	return sm.registrationToken
+}
+
+// GetRunnerConfig returns runner configuration received from controller
+func (sm *StateMachine) GetRunnerConfig() (url, group string, labels []string) {
+	return sm.runnerURL, sm.runnerGroup, sm.runnerLabels
+}
+
+// handleRegisteringRunner handles the runner registration state
+func (sm *StateMachine) handleRegisteringRunner() error {
+	log := logger.WithContext(sm.config.VMID, sm.config.PoolID, sm.config.OrgID)
+
+	// Check if we have all required information
+	if sm.registrationToken == "" {
+		log.Error("Registration token not available")
+		sm.Transition(StateError)
+		return nil
+	}
+
+	if sm.runnerURL == "" {
+		log.Error("Runner URL not available")
+		sm.Transition(StateError)
+		return nil
+	}
+
+	if sm.runnerPath == "" {
+		log.Error("Runner path not available")
+		sm.Transition(StateError)
+		return nil
+	}
+
+	log.Info("Starting GitHub Actions runner registration")
+
+	// Create runner manager
+	runnerMgr := runner.NewManager(sm.runnerPath)
+
+	// Configure runner (non-interactive)
+	log.Info("Configuring runner with token")
+	if err := runnerMgr.ConfigureRunner(
+		sm.registrationToken,
+		sm.runnerURL,
+		sm.runnerGroup,
+		sm.runnerLabels,
+	); err != nil {
+		log.WithError(err).Error("Failed to configure runner")
+		sm.Transition(StateError)
+		return nil
+	}
+
+	// Start runner process
+	log.Info("Starting runner process")
+	runnerCmd, err := runnerMgr.StartRunner()
+	if err != nil {
+		log.WithError(err).Error("Failed to start runner")
+		sm.Transition(StateError)
+		return nil
+	}
+
+	// Store runner command for later shutdown
+	sm.runnerCmd = runnerCmd
+
+	// Start the runner process
+	if err := runnerCmd.Start(); err != nil {
+		log.WithError(err).Error("Failed to start runner process")
+		sm.Transition(StateError)
+		return nil
+	}
+
+	log.WithField("pid", runnerCmd.Process.Pid).Info("GitHub Actions runner started successfully")
+
+	// Monitor runner process in a goroutine
+	go sm.monitorRunner(runnerCmd)
+
+	// Transition to idle state (runner is running)
+	log.Info("Runner registered and running, transitioning to idle")
+	sm.Transition(StateIdle)
+	return nil
+}
+
+// monitorRunner monitors the runner process and handles crashes
+func (sm *StateMachine) monitorRunner(cmd *exec.Cmd) {
+	log := logger.WithContext(sm.config.VMID, sm.config.PoolID, sm.config.OrgID)
+
+	// Wait for process to exit
+	err := cmd.Wait()
+	if err != nil {
+		log.WithError(err).Error("Runner process exited with error")
+		// TODO: Emit runner crashed event
+		// For now, transition to error state
+		sm.Transition(StateError)
+	} else {
+		log.Info("Runner process exited normally")
+		// Runner exited - could be normal shutdown or crash
+		// TODO: Determine if it was intentional shutdown or crash
+	}
 }
 
 // Shutdown gracefully shuts down the state machine
 func (sm *StateMachine) Shutdown() {
 	log := logger.WithContext(sm.config.VMID, sm.config.PoolID, sm.config.OrgID)
 	log.Info("Shutting down state machine")
+
+	// Stop runner if running
+	if sm.runnerCmd != nil && sm.runnerCmd.Process != nil {
+		log.Info("Stopping GitHub Actions runner")
+		runnerMgr := runner.NewManager(sm.runnerPath)
+		if err := runnerMgr.StopRunner(sm.runnerCmd); err != nil {
+			log.WithError(err).Warn("Error stopping runner")
+		}
+	}
+
 	sm.cancel()
 }

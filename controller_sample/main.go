@@ -15,7 +15,7 @@ import (
 const (
 	port              = "8080"
 	dataDir           = "./controller_data"
-	registrationToken = "AHTXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" // Hardcoded test token
+	registrationToken = "BUS6FEZFNVKF4XNUHMWZRNTJFGCHW" // Hardcoded test token
 )
 
 func main() {
@@ -175,14 +175,19 @@ func handleEvents(w http.ResponseWriter, r *http.Request, vmID string) {
 		log.Printf("Acknowledging VM started event - VM: %s, Pool: %s, Org: %s", vmID, poolID, orgID)
 
 		// Send explicit acknowledgment for VM started events
+		// Include registration token for runner configuration
 		response := map[string]interface{}{
-			"status":       "acknowledged", // MIGlet checks for "acknowledged" or "received"
-			"acknowledged": true,           // Explicit flag
-			"vm_id":        vmID,
-			"pool_id":      poolID,
-			"org_id":       orgID,
-			"message":      "VM started event acknowledged",
-			"timestamp":    time.Now().Format(time.RFC3339),
+			"status":             "acknowledged", // MIGlet checks for "acknowledged" or "received"
+			"acknowledged":       true,           // Explicit flag
+			"vm_id":              vmID,
+			"pool_id":            poolID,
+			"org_id":             orgID,
+			"message":            "VM started event acknowledged",
+			"timestamp":          time.Now().Format(time.RFC3339),
+			"registration_token": registrationToken,                     // Include token for runner config
+			"runner_url":         "https://github.com/monkci/miglet-v1", // GitHub org/repo URL
+			"runner_group":       "default",
+			"labels":             []string{"self-hosted", "monkci-miglet-tst1", "linux", "x64"},
 		}
 
 		w.Header().Set("Content-Type", "application/json")
