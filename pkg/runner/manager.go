@@ -22,37 +22,6 @@ func NewManager(runnerPath string) *Manager {
 	}
 }
 
-// RemoveRunnerConfiguration removes existing runner configuration
-func (m *Manager) RemoveRunnerConfiguration() error {
-	configScript := filepath.Join(m.runnerPath, "config.sh")
-
-	// Check if config script exists
-	if _, err := os.Stat(configScript); os.IsNotExist(err) {
-		return fmt.Errorf("runner config script not found at %s: %w", configScript, err)
-	}
-
-	// Check if runner is configured
-	if !m.IsConfigured() {
-		logger.Get().Debug("Runner not configured, nothing to remove")
-		return nil
-	}
-
-	logger.Get().Info("Removing existing runner configuration")
-
-	// Execute config.sh remove
-	cmd := exec.Command(configScript, "remove", "--unattended")
-	cmd.Dir = m.runnerPath
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to remove runner configuration: %w", err)
-	}
-
-	logger.Get().Info("Runner configuration removed successfully")
-	return nil
-}
-
 // ConfigureRunner configures the runner with the provided token and settings
 // Returns error if configuration fails
 func (m *Manager) ConfigureRunner(token, runnerURL, runnerGroup string, labels []string) error {
@@ -61,14 +30,6 @@ func (m *Manager) ConfigureRunner(token, runnerURL, runnerGroup string, labels [
 	// Check if config script exists
 	if _, err := os.Stat(configScript); os.IsNotExist(err) {
 		return fmt.Errorf("runner config script not found at %s: %w", configScript, err)
-	}
-
-	// Remove existing configuration if present
-	if m.IsConfigured() {
-		logger.Get().Info("Runner already configured, removing existing configuration first")
-		if err := m.RemoveRunnerConfiguration(); err != nil {
-			return fmt.Errorf("failed to remove existing configuration: %w", err)
-		}
 	}
 
 	logger.Get().WithFields(map[string]interface{}{

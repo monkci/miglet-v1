@@ -41,8 +41,12 @@ func (i *Installer) Install() error {
 
 	// Check if runner is already installed
 	if i.isInstalled(runnerPath) {
-		logger.Get().WithField("path", runnerPath).Info("GitHub Actions runner already installed")
-		return nil
+		logger.Get().WithField("path", runnerPath).Info("GitHub Actions runner already installed, removing existing installation for clean reinstall")
+
+		// Remove existing installation for clean reinstall
+		if err := i.removeExisting(runnerPath); err != nil {
+			return fmt.Errorf("failed to remove existing runner installation: %w", err)
+		}
 	}
 
 	logger.Get().Info("Installing GitHub Actions runner")
@@ -165,6 +169,19 @@ func (i *Installer) extractArchive(archivePath, destPath string) error {
 // GetRunnerPath returns the path to the installed runner
 func (i *Installer) GetRunnerPath() string {
 	return filepath.Join(i.baseDir, runnerDir)
+}
+
+// removeExisting removes the existing runner installation directory
+func (i *Installer) removeExisting(runnerPath string) error {
+	logger.Get().WithField("path", runnerPath).Info("Removing existing runner installation")
+
+	// Remove the entire directory
+	if err := os.RemoveAll(runnerPath); err != nil {
+		return fmt.Errorf("failed to remove runner directory: %w", err)
+	}
+
+	logger.Get().WithField("path", runnerPath).Info("Existing runner installation removed")
+	return nil
 }
 
 // GetRunnerVersion returns the runner version
