@@ -12,6 +12,7 @@ import (
 	"github.com/monkci/miglet/pkg/logger"
 	"github.com/monkci/miglet/pkg/metrics"
 	"github.com/monkci/miglet/pkg/runner"
+	"github.com/monkci/miglet/pkg/storage"
 )
 
 // State represents the current state of MIGlet
@@ -36,22 +37,23 @@ type StateMachine struct {
 	eventEmitter       *events.Emitter
 	ctx                context.Context
 	cancel             context.CancelFunc
-	vmStartedEventSent bool               // Track if VM started event has been sent
-	registrationToken  string             // Registration token received from controller
-	runnerURL          string             // Runner URL for registration
-	runnerGroup        string             // Runner group
-	runnerLabels       []string           // Runner labels
-	runnerPath         string             // Path to installed runner
-	runnerCmd          *exec.Cmd          // Runner process command
-	runnerMonitor      *runner.Monitor    // Runner monitor for logs/state
-	metricsCollector   *metrics.Collector // Metrics collector
-	lastHeartbeat      time.Time          // Last heartbeat time
+	vmStartedEventSent bool                    // Track if VM started event has been sent
+	registrationToken  string                  // Registration token received from controller
+	runnerURL          string                  // Runner URL for registration
+	runnerGroup        string                  // Runner group
+	runnerLabels       []string                // Runner labels
+	runnerPath         string                  // Path to installed runner
+	runnerCmd          *exec.Cmd               // Runner process command
+	runnerMonitor      *runner.Monitor         // Runner monitor for logs/state
+	metricsCollector   *metrics.Collector      // Metrics collector
+	lastHeartbeat      time.Time               // Last heartbeat time
+	mongoStorage       *storage.MongoDBStorage // MongoDB storage (optional)
 }
 
 // NewStateMachine creates a new state machine
 func NewStateMachine(cfg *config.Config, ctrl *controller.Client, emitter *events.Emitter) *StateMachine {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &StateMachine{
+	sm := &StateMachine{
 		currentState:     StateInitializing,
 		config:           cfg,
 		controller:       ctrl,
@@ -60,6 +62,26 @@ func NewStateMachine(cfg *config.Config, ctrl *controller.Client, emitter *event
 		cancel:           cancel,
 		metricsCollector: metrics.NewCollector(),
 	}
+
+	// Initialize MongoDB storage if enabled
+	if cfg.Storage.MongoDB.Enabled && cfg.Storage.MongoDB.ConnectionString != "" {
+		log := logger.WithContext(cfg.VMID, cfg.PoolID, cfg.OrgID)
+		log.Info("Initializing MongoDB storage")
+
+		mongoStorage, err := storage.NewMongoDBStorage(
+			cfg.Storage.MongoDB.ConnectionString,
+			cfg.Storage.MongoDB.Database,
+			cfg.Storage.MongoDB.Collection,
+		)
+		if err != nil {
+			log.WithError(err).Warn("Failed to initialize MongoDB storage, continuing without it")
+		} else {
+			sm.mongoStorage = mongoStorage
+			log.Info("MongoDB storage initialized successfully")
+		}
+	}
+
+	return sm
 }
 
 // GetCurrentState returns the current state
@@ -335,7 +357,7 @@ func (sm *StateMachine) handleRegisteringRunner() error {
 
 	// Start runner process with log capture
 	log.Info("Starting runner process")
-	runnerCmd, monitor, err := runnerMgr.StartRunner(monitor)
+	runnerCmd, _, err := runnerMgr.StartRunner(monitor)
 	if err != nil {
 		log.WithError(err).Error("Failed to start runner")
 		sm.Transition(StateError)
@@ -460,15 +482,30 @@ func (sm *StateMachine) sendHeartbeat() {
 		currentJob,
 	)
 
-	// Send heartbeat
+	// Send heartbeat to controller
 	if err := sm.controller.SendHeartbeat(sm.ctx, heartbeat); err != nil {
-		log.WithError(err).Warn("Failed to send heartbeat")
+		log.WithError(err).Warn("Failed to send heartbeat to controller")
 	} else {
-		log.Debug("Heartbeat sent successfully")
-		sm.lastHeartbeat = time.Now()
-		if sm.runnerMonitor != nil {
-			sm.runnerMonitor.UpdateLastHeartbeat()
-		}
+		log.Debug("Heartbeat sent to controller successfully")
+	}
+
+	// Store heartbeat in MongoDB if enabled (non-blocking)
+	if sm.mongoStorage != nil && sm.mongoStorage.IsConnected() {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			if err := sm.mongoStorage.StoreHeartbeat(ctx, heartbeat); err != nil {
+				log.WithError(err).Debug("Failed to store heartbeat in MongoDB (non-blocking)")
+			} else {
+				log.Debug("Heartbeat stored in MongoDB successfully")
+			}
+		}()
+	}
+
+	sm.lastHeartbeat = time.Now()
+	if sm.runnerMonitor != nil {
+		sm.runnerMonitor.UpdateLastHeartbeat()
 	}
 }
 
@@ -515,6 +552,17 @@ func (sm *StateMachine) Shutdown() {
 		runnerMgr := runner.NewManager(sm.runnerPath)
 		if err := runnerMgr.StopRunner(sm.runnerCmd); err != nil {
 			log.WithError(err).Warn("Error stopping runner")
+		}
+	}
+
+	// Close MongoDB connection if connected
+	if sm.mongoStorage != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := sm.mongoStorage.Close(ctx); err != nil {
+			log.WithError(err).Warn("Error closing MongoDB connection")
+		} else {
+			log.Debug("MongoDB connection closed")
 		}
 	}
 

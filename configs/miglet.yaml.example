@@ -43,3 +43,10 @@ metrics:
   include_disk: true
   include_network: true
 
+storage:
+  mongodb:
+    enabled: false
+    connection_string: "mongodb+srv://monkci:Youtubes1@monkcicluster.hoogley.mongodb.net/monkci"
+    database: "monkci"
+    collection: "heartbeats"
+

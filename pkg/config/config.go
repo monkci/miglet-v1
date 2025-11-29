@@ -31,6 +31,22 @@ type Config struct {
 
 	// Metrics
 	Metrics MetricsConfig `mapstructure:"metrics"`
+
+	// Storage
+	Storage StorageConfig `mapstructure:"storage"`
+}
+
+// StorageConfig holds storage configuration
+type StorageConfig struct {
+	MongoDB MongoDBConfig `mapstructure:"mongodb"`
+}
+
+// MongoDBConfig holds MongoDB configuration
+type MongoDBConfig struct {
+	Enabled          bool   `mapstructure:"enabled"`
+	ConnectionString string `mapstructure:"connection_string"`
+	Database         string `mapstructure:"database"`
+	Collection       string `mapstructure:"collection"`
 }
 
 // ControllerConfig holds MIG Controller configuration
@@ -156,6 +172,18 @@ func Load(configPath string) (*Config, error) {
 	if val := os.Getenv("MIGLET_LOGGING_REDACT_SECRETS"); val != "" {
 		v.Set("logging.redact_secrets", val == "true" || val == "1")
 	}
+	if val := os.Getenv("MIGLET_STORAGE_MONGODB_ENABLED"); val != "" {
+		v.Set("storage.mongodb.enabled", val == "true" || val == "1")
+	}
+	if val := os.Getenv("MIGLET_STORAGE_MONGODB_CONNECTION_STRING"); val != "" {
+		v.Set("storage.mongodb.connection_string", val)
+	}
+	if val := os.Getenv("MIGLET_STORAGE_MONGODB_DATABASE"); val != "" {
+		v.Set("storage.mongodb.database", val)
+	}
+	if val := os.Getenv("MIGLET_STORAGE_MONGODB_COLLECTION"); val != "" {
+		v.Set("storage.mongodb.collection", val)
+	}
 
 	// Load from config file if provided
 	if configPath != "" {
@@ -207,6 +235,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("metrics.collection_interval", "10s")
 	v.SetDefault("metrics.include_disk", true)
 	v.SetDefault("metrics.include_network", true)
+
+	// Storage defaults
+	v.SetDefault("storage.mongodb.enabled", false)
+	v.SetDefault("storage.mongodb.database", "monkci")
+	v.SetDefault("storage.mongodb.collection", "heartbeats")
 }
 
 // validate validates required configuration fields
