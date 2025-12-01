@@ -1,0 +1,34 @@
+[Unit]
+Description=MIGlet - MonkCI VM Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/miglet
+ExecStart=/opt/miglet/bin/miglet
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=miglet
+
+# Environment variables can be set here or in /etc/miglet/miglet.env
+# EnvironmentFile=/etc/miglet/miglet.env
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/tmp/miglet-runner
+ReadWritePaths=/opt/miglet
+
+# Resource limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+
