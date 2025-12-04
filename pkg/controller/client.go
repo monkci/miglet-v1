@@ -117,7 +117,7 @@ func (c *Client) SendVMStartedEvent(ctx context.Context, event *events.VMStarted
 					Status:       basicAck.Status,
 					Acknowledged: true,
 				}, nil
-			}
+	}
 		}
 		return nil, fmt.Errorf("failed to parse acknowledgment response: %w", err)
 	}
