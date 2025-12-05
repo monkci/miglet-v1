@@ -1,56 +1,60 @@
 #!/bin/bash
 # GCP Startup Script for MIGlet
-set -e
+set -euo pipefail
 
-MIGLET_DIR="/opt/miglet"
 LOG_FILE="/var/log/miglet-startup.log"
-
 exec > >(tee -a "$LOG_FILE") 2>&1
 
-echo "$(date): Starting MIGlet installation..."
+echo "$(date): MIGlet startup script started"
 
-# Ensure directories exist
-mkdir -p "$MIGLET_DIR/bin"
-mkdir -p "$MIGLET_DIR/configs"
-mkdir -p /etc/miglet
+### ------------------------------------------------------------
+### 1. Create required directories
+### ------------------------------------------------------------
+INSTALL_DIR="/opt/miglet"
+BIN_DIR="$INSTALL_DIR/bin"
+CONFIG_DIR="/etc/miglet"
 
+mkdir -p "$BIN_DIR"
+mkdir -p "$CONFIG_DIR"
 
-if ! command -v go &> /dev/null; then
-    echo "Installing Go..."
-    wget -q https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
-    tar -C /usr/local -xzf go1.21.5.linux-amd64.tar.gz
-    export PATH=$PATH:/usr/local/go/bin
-    rm go1.21.5.linux-amd64.tar.gz
+echo "Created MIGlet directories."
+
+### ------------------------------------------------------------
+### 2. Download MIGlet binary from GCS
+### ------------------------------------------------------------
+GCS_BINARY="gs://miglet-v1/releases/miglet-v1.0.0"
+TARGET_BIN="$BIN_DIR/miglet"
+
+echo "Downloading MIGlet binary from $GCS_BINARY"
+
+gsutil cp "$GCS_BINARY" "$TARGET_BIN"
+chmod +x "$TARGET_BIN"
+
+echo "MIGlet binary installed at $TARGET_BIN"
+
+### ------------------------------------------------------------
+### 3. Read VM metadata
+### ------------------------------------------------------------
+METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
+
+POOL_ID=$(curl -s -H "Metadata-Flavor: Google" "$METADATA_URL/pool-id" || true)
+VM_ID=$(curl -s -H "Metadata-Flavor: Google" \
+        http://metadata.google.internal/computeMetadata/v1/instance/name || true)
+
+CONTROLLER_ENDPOINT="http://controller-service.monkci.local"
+
+if [[ -z "$POOL_ID" ]]; then
+    echo "ERROR: pool-id metadata attribute is missing."
+    echo "Set metadata: --metadata=pool-id=<value>"
+    exit 1
 fi
 
+echo "Metadata loaded: pool_id=$POOL_ID vm_id=$VM_ID"
 
-echo "Downloading MIGlet binary from GCS..."
-
-# ------------------------------
-# ✅ OPTION: Download MIGlet binary from GCS bucket
-# ------------------------------
-# Required:
-# - VM service account has roles/storage.objectViewer on your bucket
-# - Replace BUCKET_NAME/path with your actual location
-
-GCS_BUCKET="gs://monkci-artifacts/miglet/miglet-latest"
-LOCAL_BIN_PATH="$MIGLET_DIR/bin/miglet"
-
-# Fetch binary
-gsutil cp "$GCS_BUCKET" "$LOCAL_BIN_PATH"
-chmod +x "$LOCAL_BIN_PATH"
-
-echo "MIGlet binary downloaded and marked executable."
-
-# Read metadata from instance attributes
-POOL_ID=$(curl -s -H "Metadata-Flavor: Google" \
-    http://metadata.google.internal/computeMetadata/v1/instance/attributes/pool-id || echo "")
-VM_ID=$(curl -s -H "Metadata-Flavor: Google" \
-    http://metadata.google.internal/computeMetadata/v1/instance/name || echo "")
-CONTROLLER_ENDPOINT="http://controller-service.monkci.local"   # FIX the double quote issue
-
-# Create env file
-cat > /etc/miglet/miglet.env <<EOF
+### ------------------------------------------------------------
+### 4. Write environment file
+### ------------------------------------------------------------
+cat > "$CONFIG_DIR/miglet.env" <<EOF
 MIGLET_POOL_ID="$POOL_ID"
 MIGLET_VM_ID="$VM_ID"
 MIGLET_CONTROLLER_ENDPOINT="$CONTROLLER_ENDPOINT"
@@ -58,18 +62,44 @@ MIGLET_LOGGING_LEVEL="info"
 MIGLET_LOGGING_FORMAT="text"
 EOF
 
-echo "Environment file created."
+echo "Environment file written to $CONFIG_DIR/miglet.env"
 
-# Start MIGlet service
-if [ -f "$MIGLET_DIR/deploy/systemd/miglet.service" ]; then
-    cp "$MIGLET_DIR/deploy/systemd/miglet.service" /etc/systemd/system/miglet.service
-    systemctl daemon-reload
-    systemctl enable miglet.service
-    systemctl start miglet.service
-    echo "$(date): MIGlet systemd service started."
-else
-    nohup "$LOCAL_BIN_PATH" > /var/log/miglet.log 2>&1 &
-    echo "$(date): MIGlet started in background (no systemd service found)."
-fi
+### ------------------------------------------------------------
+### 5. Create systemd service
+### ------------------------------------------------------------
+SERVICE_FILE="/etc/systemd/system/miglet.service"
 
-echo "$(date): MIGlet startup script completed."
+cat > "$SERVICE_FILE" <<'EOF'
+[Unit]
+Description=MIGlet - MonkCI VM Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/miglet
+ExecStart=/opt/miglet/bin/miglet
+EnvironmentFile=/etc/miglet/miglet.env
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+echo "Systemd service file created at $SERVICE_FILE"
+
+### ------------------------------------------------------------
+### 6. Enable + start MIGlet service
+### ------------------------------------------------------------
+systemctl daemon-reload
+systemctl enable miglet
+systemctl restart miglet
+
+echo "$(date): MIGlet systemd service started"
+echo "$(date): MIGlet startup script completed successfully"
