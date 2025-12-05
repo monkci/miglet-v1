@@ -4,11 +4,20 @@ This is a simple, sketchy controller for testing MIGlet communication. It stores
 
 ## Features
 
+### HTTP Server (Port 8080)
 - ✅ Receives and stores VM events
 - ✅ Receives and stores heartbeats
 - ✅ Receives registration token requests and sends hardcoded token
 - ✅ Responds to command polling (returns empty for now)
 - ✅ Stores all data in `controller_data/` directory
+
+### gRPC Server (Port 50051)
+- ✅ Bidirectional streaming for commands and events
+- ✅ Receives VM connections via gRPC
+- ✅ Sends `register_runner` commands automatically
+- ✅ Receives events, heartbeats, and command acknowledgments
+- ✅ Tracks connected VMs
+- ✅ Queues commands for offline VMs
 
 ## Usage
 
@@ -16,18 +25,33 @@ This is a simple, sketchy controller for testing MIGlet communication. It stores
 
 ```bash
 cd controller_sample
-go run main.go
+go run main.go grpc_server.go
 ```
 
-The controller will start on port `8080` by default.
+Or build and run:
+```bash
+go build -o controller .
+./controller
+```
+
+The controller will start:
+- **HTTP server** on port `8080` (for HTTP-based communication)
+- **gRPC server** on port `50051` (for bidirectional streaming)
 
 ### Test Endpoints
 
+#### HTTP Endpoints
 - **Health Check**: `GET http://localhost:8080/health`
 - **Registration Token**: `POST http://localhost:8080/api/v1/vms/{vm_id}/registration-token`
 - **Events**: `POST http://localhost:8080/api/v1/vms/{vm_id}/events`
 - **Heartbeat**: `POST http://localhost:8080/api/v1/vms/{vm_id}/heartbeat`
 - **Commands**: `GET http://localhost:8080/api/v1/vms/{vm_id}/commands`
+
+#### gRPC Endpoint
+- **Stream Commands**: `grpc://localhost:50051` (bidirectional streaming)
+  - MIGlet connects and sends `ConnectRequest`
+  - Controller sends `register_runner` command automatically
+  - All events and heartbeats flow through the stream
 
 ### Hardcoded Responses
 
@@ -80,7 +104,7 @@ controller_data/
 1. Start the controller:
    ```bash
    cd controller_sample
-   go run main.go
+   go run main.go grpc_server.go
    ```
 
 2. Configure MIGlet to point to the controller:

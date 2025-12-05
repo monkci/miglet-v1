@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/monkci/miglet/pkg/metrics"
 	"github.com/monkci/miglet/pkg/runner"
 	"github.com/monkci/miglet/pkg/storage"
+	"github.com/monkci/miglet/proto/commands"
 )
 
 // State represents the current state of MIGlet
@@ -21,6 +23,7 @@ type State string
 const (
 	StateInitializing         State = "initializing"
 	StateWaitingForController State = "waiting_for_controller"
+	StateReady                State = "ready" // Ready for controller to send registration config
 	StateRegisteringRunner    State = "registering_runner"
 	StateIdle                 State = "idle"
 	StateJobRunning           State = "job_running"
@@ -34,6 +37,7 @@ type StateMachine struct {
 	currentState       State
 	config             *config.Config
 	controller         *controller.Client
+	grpcClient         *controller.GRPCClient // gRPC client for bidirectional streaming
 	eventEmitter       *events.Emitter
 	ctx                context.Context
 	cancel             context.CancelFunc
@@ -140,6 +144,8 @@ func (sm *StateMachine) executeState() error {
 		return sm.handleInitializing()
 	case StateWaitingForController:
 		return sm.handleWaitingForController()
+	case StateReady:
+		return sm.handleReady()
 	case StateRegisteringRunner:
 		return sm.handleRegisteringRunner()
 	case StateIdle:
@@ -263,25 +269,7 @@ func (sm *StateMachine) handleWaitingForController() error {
 		}
 
 		if ackResponse != nil && (ackResponse.Acknowledged || ackResponse.Status == "acknowledged" || ackResponse.Status == "received") {
-			log.Info("Controller acknowledged VM started event")
-
-			// Store registration token and runner config from acknowledgment
-			if ackResponse.RegistrationToken != "" {
-				sm.registrationToken = ackResponse.RegistrationToken
-				sm.runnerURL = ackResponse.RunnerURL
-				sm.runnerGroup = ackResponse.RunnerGroup
-				sm.runnerLabels = ackResponse.Labels
-
-				log.WithFields(map[string]interface{}{
-					"token_length": len(ackResponse.RegistrationToken),
-					"runner_url":   ackResponse.RunnerURL,
-					"runner_group": ackResponse.RunnerGroup,
-					"labels":       ackResponse.Labels,
-				}).Info("Received registration token and runner config")
-			} else {
-				log.Warn("Controller acknowledged but did not provide registration token")
-			}
-
+			log.Info("Controller acknowledged VM started event - MIGlet is ready for registration config")
 			ackReceived = true
 			break
 		}
@@ -293,10 +281,121 @@ func (sm *StateMachine) handleWaitingForController() error {
 		return nil // Don't return error, just transition to error state
 	}
 
-	// Transition to registering runner state
-	log.Info("Controller acknowledgment received, transitioning to registering runner")
-	sm.Transition(StateRegisteringRunner)
+	// Initialize gRPC client before transitioning to Ready state
+	// This ensures we're ready to receive commands via gRPC
+	if sm.grpcClient == nil {
+		grpcClient, err := controller.NewGRPCClient(sm.config)
+		if err != nil {
+			log.WithError(err).Warn("Failed to create gRPC client, will retry in Ready state")
+		} else {
+			sm.grpcClient = grpcClient
+			// Don't connect yet - will connect in handleReady
+		}
+	}
+
+	// Transition to ready state - waiting for controller to send registration config
+	log.Info("Controller acknowledgment received, transitioning to ready state - waiting for registration config via gRPC")
+	sm.Transition(StateReady)
 	return nil
+}
+
+// handleReady handles the ready state - using gRPC streaming for commands
+func (sm *StateMachine) handleReady() error {
+	log := logger.WithContext(sm.config.VMID, sm.config.PoolID, sm.config.OrgID)
+
+	log.Info("MIGlet is ready - connecting to controller via gRPC for commands")
+
+	// Initialize gRPC client if not already initialized
+	if sm.grpcClient == nil {
+		grpcClient, err := controller.NewGRPCClient(sm.config)
+		if err != nil {
+			log.WithError(err).Error("Failed to create gRPC client")
+			sm.Transition(StateError)
+			return nil
+		}
+
+		sm.grpcClient = grpcClient
+
+		// Connect to controller
+		if err := sm.grpcClient.Connect(); err != nil {
+			log.WithError(err).Error("Failed to connect to controller via gRPC")
+			sm.Transition(StateError)
+			return nil
+		}
+
+		log.Info("gRPC connection established, waiting for commands")
+	}
+
+	// Listen for commands from gRPC stream
+	commandCh := sm.grpcClient.GetCommandChannel()
+
+	for {
+		select {
+		case <-sm.ctx.Done():
+			return nil
+		case cmd := <-commandCh:
+			if cmd == nil {
+				log.Warn("Command channel closed, reconnecting...")
+				// Reconnection will be handled by gRPC client
+				time.Sleep(5 * time.Second)
+				continue
+			}
+
+			log.WithFields(map[string]interface{}{
+				"command_id": cmd.Id,
+				"type":       cmd.Type,
+			}).Info("Received command from controller via gRPC")
+
+			if cmd.Type == "register_runner" {
+				// Extract registration token
+				token, ok := cmd.StringParams["registration_token"]
+				if !ok || token == "" {
+					log.Error("Register runner command missing registration_token")
+					sm.grpcClient.SendCommandAck(cmd.Id, false, "Missing registration_token", nil)
+					continue
+				}
+
+				// Extract runner URL
+				runnerURL, ok := cmd.StringParams["runner_url"]
+				if !ok || runnerURL == "" {
+					log.Error("Register runner command missing runner_url")
+					sm.grpcClient.SendCommandAck(cmd.Id, false, "Missing runner_url", nil)
+					continue
+				}
+
+				// Extract runner group (optional)
+				runnerGroup := cmd.StringParams["runner_group"]
+
+				// Extract labels
+				labels := cmd.StringArrayParams
+
+				// Store registration config
+				sm.registrationToken = token
+				sm.runnerURL = runnerURL
+				sm.runnerGroup = runnerGroup
+				sm.runnerLabels = labels
+
+				log.WithFields(map[string]interface{}{
+					"token_length": len(token),
+					"runner_url":   runnerURL,
+					"runner_group": runnerGroup,
+					"labels":       labels,
+				}).Info("Registration config received, transitioning to registering runner")
+
+				// Send acknowledgment
+				sm.grpcClient.SendCommandAck(cmd.Id, true, "Registration config received", nil)
+
+				// Transition to registering runner state
+				sm.Transition(StateRegisteringRunner)
+				return nil
+			} else {
+				// Handle other command types (drain, shutdown, etc.)
+				log.WithField("command_type", cmd.Type).Info("Received command (not register_runner)")
+				// TODO: Handle other command types
+				sm.grpcClient.SendCommandAck(cmd.Id, false, "Command type not yet implemented", nil)
+			}
+		}
+	}
 }
 
 // GetRegistrationToken returns the registration token received from controller
@@ -376,7 +475,7 @@ func (sm *StateMachine) handleRegisteringRunner() error {
 
 	log.WithField("pid", runnerCmd.Process.Pid).Info("GitHub Actions runner started successfully")
 
-	// Send runner registered event
+	// Send runner registered event (prefer gRPC, fallback to HTTP)
 	registeredEvent := events.NewRunnerRegisteredEvent(
 		sm.config.VMID,
 		sm.config.PoolID,
@@ -385,8 +484,25 @@ func (sm *StateMachine) handleRegisteringRunner() error {
 	)
 	registeredEvent.Labels = sm.runnerLabels
 	registeredEvent.RunnerGroup = sm.runnerGroup
-	if err := sm.controller.SendEvent(sm.ctx, registeredEvent); err != nil {
-		log.WithError(err).Warn("Failed to send runner registered event")
+
+	// Try gRPC first, fallback to HTTP
+	if sm.grpcClient != nil {
+		eventData := map[string]string{
+			"runner_url":   sm.runnerURL,
+			"runner_group": sm.runnerGroup,
+		}
+		if err := sm.grpcClient.SendEvent("runner_registered", sm.config.VMID, sm.config.PoolID, sm.config.OrgID, eventData); err != nil {
+			log.WithError(err).Warn("Failed to send runner registered event via gRPC, falling back to HTTP")
+			if err := sm.controller.SendEvent(sm.ctx, registeredEvent); err != nil {
+				log.WithError(err).Warn("Failed to send runner registered event via HTTP")
+			}
+		} else {
+			log.Debug("Runner registered event sent via gRPC")
+		}
+	} else {
+		if err := sm.controller.SendEvent(sm.ctx, registeredEvent); err != nil {
+			log.WithError(err).Warn("Failed to send runner registered event")
+		}
 	}
 
 	// Monitor runner process in a goroutine
@@ -415,16 +531,26 @@ func (sm *StateMachine) setupRunnerCallbacks(monitor *runner.Monitor) {
 				"run_id": runID,
 			}).Info("Job started")
 
-			// Send job started event
-			jobEvent := events.NewJobStartedEvent(
-				sm.config.VMID,
-				sm.config.PoolID,
-				sm.config.OrgID,
-				jobID,
-				runID,
-			)
-			if err := sm.controller.SendEvent(sm.ctx, jobEvent); err != nil {
-				log.WithError(err).Warn("Failed to send job started event")
+			// Send job started event (prefer gRPC, fallback to HTTP)
+			eventData := map[string]string{
+				"job_id": jobID,
+				"run_id": runID,
+			}
+			if sm.grpcClient != nil {
+				if err := sm.grpcClient.SendEvent("job_started", sm.config.VMID, sm.config.PoolID, sm.config.OrgID, eventData); err != nil {
+					log.WithError(err).Warn("Failed to send job started event via gRPC, falling back to HTTP")
+					jobEvent := events.NewJobStartedEvent(sm.config.VMID, sm.config.PoolID, sm.config.OrgID, jobID, runID)
+					if err := sm.controller.SendEvent(sm.ctx, jobEvent); err != nil {
+						log.WithError(err).Warn("Failed to send job started event via HTTP")
+					}
+				} else {
+					log.Debug("Job started event sent via gRPC")
+				}
+			} else {
+				jobEvent := events.NewJobStartedEvent(sm.config.VMID, sm.config.PoolID, sm.config.OrgID, jobID, runID)
+				if err := sm.controller.SendEvent(sm.ctx, jobEvent); err != nil {
+					log.WithError(err).Warn("Failed to send job started event")
+				}
 			}
 		},
 		func(jobID, runID string, success bool) {
@@ -434,23 +560,33 @@ func (sm *StateMachine) setupRunnerCallbacks(monitor *runner.Monitor) {
 				"success": success,
 			}).Info("Job completed")
 
-			// Send job completed event
-			jobEvent := events.NewJobCompletedEvent(
-				sm.config.VMID,
-				sm.config.PoolID,
-				sm.config.OrgID,
-				jobID,
-				runID,
-				success,
-			)
-			if err := sm.controller.SendEvent(sm.ctx, jobEvent); err != nil {
-				log.WithError(err).Warn("Failed to send job completed event")
+			// Send job completed event (prefer gRPC, fallback to HTTP)
+			eventData := map[string]string{
+				"job_id":  jobID,
+				"run_id":  runID,
+				"success": fmt.Sprintf("%t", success),
+			}
+			if sm.grpcClient != nil {
+				if err := sm.grpcClient.SendEvent("job_completed", sm.config.VMID, sm.config.PoolID, sm.config.OrgID, eventData); err != nil {
+					log.WithError(err).Warn("Failed to send job completed event via gRPC, falling back to HTTP")
+					jobEvent := events.NewJobCompletedEvent(sm.config.VMID, sm.config.PoolID, sm.config.OrgID, jobID, runID, success)
+					if err := sm.controller.SendEvent(sm.ctx, jobEvent); err != nil {
+						log.WithError(err).Warn("Failed to send job completed event via HTTP")
+					}
+				} else {
+					log.Debug("Job completed event sent via gRPC")
+				}
+			} else {
+				jobEvent := events.NewJobCompletedEvent(sm.config.VMID, sm.config.PoolID, sm.config.OrgID, jobID, runID, success)
+				if err := sm.controller.SendEvent(sm.ctx, jobEvent); err != nil {
+					log.WithError(err).Warn("Failed to send job completed event")
+				}
 			}
 		},
 	)
 }
 
-// sendHeartbeat sends a heartbeat to the controller
+// sendHeartbeat sends a heartbeat to the controller (via gRPC if available, otherwise HTTP)
 func (sm *StateMachine) sendHeartbeat() {
 	log := logger.WithContext(sm.config.VMID, sm.config.PoolID, sm.config.OrgID)
 
@@ -472,7 +608,7 @@ func (sm *StateMachine) sendHeartbeat() {
 		}
 	}
 
-	// Create heartbeat event
+	// Create heartbeat event (for MongoDB storage)
 	heartbeat := events.NewHeartbeatEvent(
 		sm.config.VMID,
 		sm.config.PoolID,
@@ -482,11 +618,63 @@ func (sm *StateMachine) sendHeartbeat() {
 		currentJob,
 	)
 
-	// Send heartbeat to controller
-	if err := sm.controller.SendHeartbeat(sm.ctx, heartbeat); err != nil {
-		log.WithError(err).Warn("Failed to send heartbeat to controller")
+	// Send heartbeat via gRPC if available, otherwise fall back to HTTP
+	if sm.grpcClient != nil {
+		// Convert to proto format
+		protoHealth := &commands.VMHealth{
+			CpuUsagePercent:    vmHealth.CPULoad,
+			MemoryUsagePercent: float64(vmHealth.MemoryUsed) / float64(vmHealth.MemoryTotal) * 100,
+			DiskUsagePercent:   0,                                  // TODO: Calculate from disk stats
+			MemoryTotalBytes:   vmHealth.MemoryTotal * 1024 * 1024, // Convert MB to bytes
+			MemoryUsedBytes:    vmHealth.MemoryUsed * 1024 * 1024,
+			DiskTotalBytes:     vmHealth.DiskTotal * 1024 * 1024 * 1024, // Convert GB to bytes
+			DiskUsedBytes:      vmHealth.DiskUsed * 1024 * 1024 * 1024,
+		}
+
+		protoRunnerState := &commands.RunnerState{
+			State:      string(runnerState),
+			Configured: sm.runnerMonitor != nil,
+			RunnerName: sm.config.VMID,
+			Labels:     sm.runnerLabels,
+		}
+
+		var protoJobInfo *commands.JobInfo
+		if currentJob != nil {
+			protoJobInfo = &commands.JobInfo{
+				JobId:      currentJob.JobID,
+				RunId:      currentJob.RunID,
+				Repository: "",        // TODO: Get from job metadata if available
+				Branch:     "",        // TODO: Get from job metadata if available
+				Commit:     "",        // TODO: Get from job metadata if available
+				Status:     "running", // TODO: Get actual status
+				StartedAt:  currentJob.StartedAt.Unix(),
+			}
+		}
+
+		// Send via gRPC
+		if err := sm.grpcClient.SendHeartbeat(
+			sm.config.VMID,
+			sm.config.PoolID,
+			sm.config.OrgID,
+			protoHealth,
+			protoRunnerState,
+			protoJobInfo,
+		); err != nil {
+			log.WithError(err).Warn("Failed to send heartbeat via gRPC, falling back to HTTP")
+			// Fall back to HTTP
+			if err := sm.controller.SendHeartbeat(sm.ctx, heartbeat); err != nil {
+				log.WithError(err).Warn("Failed to send heartbeat to controller")
+			}
+		} else {
+			log.Debug("Heartbeat sent to controller via gRPC successfully")
+		}
 	} else {
-		log.Debug("Heartbeat sent to controller successfully")
+		// Use HTTP fallback
+		if err := sm.controller.SendHeartbeat(sm.ctx, heartbeat); err != nil {
+			log.WithError(err).Warn("Failed to send heartbeat to controller")
+		} else {
+			log.Debug("Heartbeat sent to controller via HTTP successfully")
+		}
 	}
 
 	// Store heartbeat in MongoDB if enabled (non-blocking)
@@ -529,8 +717,23 @@ func (sm *StateMachine) monitorRunner(cmd *exec.Cmd) {
 				"error": err.Error(),
 			},
 		}
-		if sendErr := sm.controller.SendEvent(sm.ctx, crashedEvent); sendErr != nil {
-			log.WithError(sendErr).Warn("Failed to send runner crashed event")
+		// Send runner crashed event (prefer gRPC, fallback to HTTP)
+		if sm.grpcClient != nil {
+			eventData := map[string]string{
+				"reason": "process_exited",
+			}
+			if err := sm.grpcClient.SendEvent("runner_crashed", sm.config.VMID, sm.config.PoolID, sm.config.OrgID, eventData); err != nil {
+				log.WithError(err).Warn("Failed to send runner crashed event via gRPC, falling back to HTTP")
+				if sendErr := sm.controller.SendEvent(sm.ctx, crashedEvent); sendErr != nil {
+					log.WithError(sendErr).Warn("Failed to send runner crashed event via HTTP")
+				}
+			} else {
+				log.Debug("Runner crashed event sent via gRPC")
+			}
+		} else {
+			if sendErr := sm.controller.SendEvent(sm.ctx, crashedEvent); sendErr != nil {
+				log.WithError(sendErr).Warn("Failed to send runner crashed event")
+			}
 		}
 
 		sm.Transition(StateError)
@@ -552,6 +755,15 @@ func (sm *StateMachine) Shutdown() {
 		runnerMgr := runner.NewManager(sm.runnerPath)
 		if err := runnerMgr.StopRunner(sm.runnerCmd); err != nil {
 			log.WithError(err).Warn("Error stopping runner")
+		}
+	}
+
+	// Close gRPC connection if connected
+	if sm.grpcClient != nil {
+		if err := sm.grpcClient.Close(); err != nil {
+			log.WithError(err).Warn("Error closing gRPC connection")
+		} else {
+			log.Debug("gRPC connection closed")
 		}
 	}
 

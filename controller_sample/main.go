@@ -18,22 +18,38 @@ const (
 	registrationToken = "BUS6FEZFNVKF4XNUHMWZRNTJFGCHW" // Hardcoded test token
 )
 
+// Track VMs that have sent vm_started events and are ready for registration
+var readyVMs = make(map[string]bool)
+var vmRegistrationSent = make(map[string]bool) // Track if we've already sent registration command
+
 func main() {
 	// Create data directory
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		log.Fatalf("Failed to create data directory: %v", err)
 	}
 
-	// Setup routes
+	// Create gRPC server
+	grpcServer := NewGRPCServer()
+
+	// Start gRPC server in a goroutine
+	go func() {
+		if err := StartGRPCServer(grpcServer); err != nil {
+			log.Fatalf("gRPC server failed: %v", err)
+		}
+	}()
+
+	// Setup HTTP routes
 	http.HandleFunc("/api/v1/vms/", handleVMRequests)
 	http.HandleFunc("/health", handleHealth)
 
-	log.Printf("Sample MIG Controller starting on port %s", port)
-	log.Printf("Data will be stored in: %s", dataDir)
-	log.Printf("Registration token (hardcoded): %s", registrationToken)
+	log.Printf("Sample MIG Controller starting:")
+	log.Printf("  HTTP server on port %s", port)
+	log.Printf("  gRPC server on port %s", grpcPort)
+	log.Printf("  Data will be stored in: %s", dataDir)
+	log.Printf("  Registration token (hardcoded): %s", registrationToken)
 
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
-		log.Fatalf("Server failed: %v", err)
+		log.Fatalf("HTTP server failed: %v", err)
 	}
 }
 
@@ -174,20 +190,21 @@ func handleEvents(w http.ResponseWriter, r *http.Request, vmID string) {
 		orgID, _ := event["org_id"].(string)
 		log.Printf("Acknowledging VM started event - VM: %s, Pool: %s, Org: %s", vmID, poolID, orgID)
 
+			// Mark VM as ready for registration
+		readyVMs[vmID] = true
+		vmRegistrationSent[vmID] = false // Reset flag for this VM
+
 		// Send explicit acknowledgment for VM started events
-		// Include registration token for runner configuration
+		// MIGlet will transition to "ready" state and poll for registration config
 		response := map[string]interface{}{
-			"status":             "acknowledged", // MIGlet checks for "acknowledged" or "received"
-			"acknowledged":       true,           // Explicit flag
-			"vm_id":              vmID,
-			"pool_id":            poolID,
-			"org_id":             orgID,
-			"message":            "VM started event acknowledged",
-			"timestamp":          time.Now().Format(time.RFC3339),
-			"registration_token": registrationToken,                     // Include token for runner config
-			"runner_url":         "https://github.com/monkci/miglet-v1", // GitHub org/repo URL
-			"runner_group":       "default",
-			"labels":             []string{"self-hosted", "monkci-miglet-tst1", "linux", "x64"},
+			"status":       "acknowledged", // MIGlet checks for "acknowledged" or "received"
+			"acknowledged": true,           // Explicit flag
+			"vm_id":        vmID,
+			"pool_id":      poolID,
+			"org_id":       orgID,
+			"message":      "VM started event acknowledged - MIGlet is ready for registration config",
+			"timestamp":    time.Now().Format(time.RFC3339),
+			// Note: Registration token is NOT sent here - it will be sent via command
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -253,21 +270,31 @@ func handleCommands(w http.ResponseWriter, r *http.Request, vmID string) {
 
 	log.Printf("Command request from VM %s", vmID)
 
-	// For now, return no commands (empty response)
-	// Later, we can return hardcoded commands like "drain" or "shutdown"
-	response := map[string]interface{}{
-		"commands": []interface{}{},
-		"vm_id":    vmID,
+	// Check if VM is ready and we haven't sent registration command yet
+	var commands []map[string]interface{}
+
+	if readyVMs[vmID] && !vmRegistrationSent[vmID] {
+		// Send register_runner command with registration token and config
+		log.Printf("Sending register_runner command to VM %s", vmID)
+		commands = append(commands, map[string]interface{}{
+			"id":   fmt.Sprintf("register-%s-%d", vmID, time.Now().Unix()),
+			"type": "register_runner",
+			"parameters": map[string]interface{}{
+				"registration_token": registrationToken,
+				"runner_url":         "https://github.com/monkci/miglet-v1",
+				"runner_group":       "default",
+				"labels":             []string{"self-hosted", "monkci-miglet-tst1", "linux", "x64"},
+				"expires_at":         time.Now().Add(1 * time.Hour).Format(time.RFC3339),
+			},
+			"created_at": time.Now().Format(time.RFC3339),
+		})
+		vmRegistrationSent[vmID] = true // Mark as sent
 	}
 
-	// Uncomment to send a test command:
-	// response["commands"] = []map[string]interface{}{
-	// 	{
-	// 		"type":    "drain",
-	// 		"command": "drain",
-	// 		"message": "Stop accepting new jobs",
-	// 	},
-	// }
+	response := map[string]interface{}{
+		"commands": commands,
+		"vm_id":    vmID,
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

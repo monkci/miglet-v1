@@ -117,7 +117,7 @@ func (c *Client) SendVMStartedEvent(ctx context.Context, event *events.VMStarted
 					Status:       basicAck.Status,
 					Acknowledged: true,
 				}, nil
-	}
+			}
 		}
 		return nil, fmt.Errorf("failed to parse acknowledgment response: %w", err)
 	}
@@ -279,4 +279,71 @@ func (c *Client) SendHeartbeat(ctx context.Context, heartbeat *events.HeartbeatE
 	}
 
 	return nil
+}
+
+// Command represents a command from the controller
+type Command struct {
+	ID         string                 `json:"id"`
+	Type       string                 `json:"type"` // register_runner, drain, shutdown, update_config, set_log_level
+	Parameters map[string]interface{} `json:"parameters"`
+	CreatedAt  time.Time              `json:"created_at"`
+}
+
+// CommandsResponse represents the response from polling commands
+type CommandsResponse struct {
+	Commands []Command `json:"commands"`
+	VMID     string    `json:"vm_id"`
+}
+
+// RegisterRunnerCommandParams represents parameters for register_runner command
+type RegisterRunnerCommandParams struct {
+	RegistrationToken string   `json:"registration_token"`
+	RunnerURL         string   `json:"runner_url"`
+	RunnerGroup       string   `json:"runner_group"`
+	Labels            []string `json:"labels"`
+	ExpiresAt         string   `json:"expires_at,omitempty"`
+}
+
+// PollCommands polls the controller for pending commands
+func (c *Client) PollCommands(ctx context.Context) (*CommandsResponse, error) {
+	log := logger.WithContext(c.vmID, "", "")
+
+	// Create request
+	url := fmt.Sprintf("%s/api/v1/vms/%s/commands", c.endpoint, c.vmID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if c.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authToken)
+	}
+
+	// Send request
+	log.Debug("Polling for commands from controller")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Read response
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// Check status code
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	// Parse response
+	var commandsResp CommandsResponse
+	if err := json.Unmarshal(respBody, &commandsResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &commandsResp, nil
 }
