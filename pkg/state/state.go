@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sync"
 	"time"
 
 	"github.com/monkci/miglet/pkg/config"
@@ -52,6 +53,8 @@ type StateMachine struct {
 	metricsCollector   *metrics.Collector      // Metrics collector
 	lastHeartbeat      time.Time               // Last heartbeat time
 	mongoStorage       *storage.MongoDBStorage // MongoDB storage (optional)
+	heartbeatStop      chan struct{}           // Signal to stop heartbeat goroutine
+	heartbeatWg        sync.WaitGroup          // Wait group for heartbeat goroutine
 }
 
 // NewStateMachine creates a new state machine
@@ -65,6 +68,7 @@ func NewStateMachine(cfg *config.Config, ctrl *controller.Client, emitter *event
 		ctx:              ctx,
 		cancel:           cancel,
 		metricsCollector: metrics.NewCollector(),
+		heartbeatStop:    make(chan struct{}),
 	}
 
 	// Initialize MongoDB storage if enabled
@@ -103,12 +107,18 @@ func (sm *StateMachine) Transition(newState State) {
 		"old_state": oldState,
 		"new_state": newState,
 	}).Info("State transition")
+
+	// Send immediate heartbeat on state transition (non-blocking)
+	go sm.sendHeartbeat()
 }
 
 // Run starts the state machine and executes state handlers
 func (sm *StateMachine) Run() error {
 	log := logger.WithContext(sm.config.VMID, sm.config.PoolID, sm.config.OrgID)
 	log.Info("State machine starting")
+
+	// Start background heartbeat loop
+	sm.startHeartbeatLoop()
 
 	for {
 		select {
@@ -137,6 +147,45 @@ func (sm *StateMachine) Run() error {
 	}
 }
 
+// startHeartbeatLoop starts a background goroutine that sends heartbeats at regular intervals
+func (sm *StateMachine) startHeartbeatLoop() {
+	log := logger.WithContext(sm.config.VMID, sm.config.PoolID, sm.config.OrgID)
+	log.Info("Starting background heartbeat loop")
+
+	sm.heartbeatWg.Add(1)
+	go func() {
+		defer sm.heartbeatWg.Done()
+
+		ticker := time.NewTicker(sm.config.Heartbeat.Interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-sm.heartbeatStop:
+				log.Info("Heartbeat loop stopped")
+				return
+			case <-sm.ctx.Done():
+				log.Info("Heartbeat loop cancelled")
+				return
+			case <-ticker.C:
+				// Only send heartbeat if gRPC is connected (to avoid spam during initialization)
+				if sm.grpcClient != nil {
+					sm.sendHeartbeat()
+				}
+			}
+		}
+	}()
+}
+
+// stopHeartbeatLoop stops the background heartbeat goroutine
+func (sm *StateMachine) stopHeartbeatLoop() {
+	log := logger.WithContext(sm.config.VMID, sm.config.PoolID, sm.config.OrgID)
+	log.Info("Stopping heartbeat loop")
+
+	close(sm.heartbeatStop)
+	sm.heartbeatWg.Wait()
+}
+
 // executeState executes the handler for the current state
 func (sm *StateMachine) executeState() error {
 	switch sm.currentState {
@@ -149,14 +198,14 @@ func (sm *StateMachine) executeState() error {
 	case StateRegisteringRunner:
 		return sm.handleRegisteringRunner()
 	case StateIdle:
-		// Runner is running, send heartbeats periodically
+		// Runner is running, heartbeats are sent by background goroutine
 		// The runner process is monitored in a separate goroutine
+		// Just wait for context cancellation or state change
 		select {
 		case <-sm.ctx.Done():
 			return nil
-		case <-time.After(sm.config.Heartbeat.Interval):
-			// Send heartbeat
-			sm.sendHeartbeat()
+		case <-time.After(1 * time.Second):
+			// Small delay to prevent tight loop
 			return nil
 		}
 	case StateError:
@@ -676,6 +725,9 @@ func (sm *StateMachine) monitorRunner(cmd *exec.Cmd) {
 func (sm *StateMachine) Shutdown() {
 	log := logger.WithContext(sm.config.VMID, sm.config.PoolID, sm.config.OrgID)
 	log.Info("Shutting down state machine")
+
+	// Stop heartbeat loop first
+	sm.stopHeartbeatLoop()
 
 	// Stop runner if running
 	if sm.runnerCmd != nil && sm.runnerCmd.Process != nil {
