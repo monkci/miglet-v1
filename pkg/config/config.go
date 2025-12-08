@@ -51,10 +51,11 @@ type MongoDBConfig struct {
 
 // ControllerConfig holds MIG Controller configuration
 type ControllerConfig struct {
-	Endpoint string        `mapstructure:"endpoint"`
-	Auth     AuthConfig    `mapstructure:"auth"`
-	Timeout  time.Duration `mapstructure:"timeout"`
-	Retry    RetryConfig   `mapstructure:"retry"`
+	Endpoint     string        `mapstructure:"endpoint"`      // HTTP endpoint (legacy, used for gRPC derivation)
+	GRPCEndpoint string        `mapstructure:"grpc_endpoint"` // gRPC endpoint (e.g., "localhost:50051")
+	Auth         AuthConfig    `mapstructure:"auth"`
+	Timeout      time.Duration `mapstructure:"timeout"`
+	Retry        RetryConfig   `mapstructure:"retry"`
 }
 
 // AuthConfig holds authentication configuration
@@ -254,9 +255,12 @@ func validate(cfg *Config) error {
 	// if cfg.OrgID == "" {
 	// 	return fmt.Errorf("org_id is required")
 	// }
-	if cfg.Controller.Endpoint == "" {
-		return fmt.Errorf("controller.endpoint is required")
+	
+	// Either gRPC endpoint or HTTP endpoint (for derivation) is required
+	if cfg.Controller.GRPCEndpoint == "" && cfg.Controller.Endpoint == "" {
+		return fmt.Errorf("controller.grpc_endpoint or controller.endpoint is required")
 	}
+	
 	// github.org is optional - may be provided later via controller
 	// if cfg.GitHub.Org == "" {
 	// 	return fmt.Errorf("github.org is required")

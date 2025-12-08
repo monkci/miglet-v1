@@ -21,15 +21,15 @@ import (
 type State string
 
 const (
-	StateInitializing         State = "initializing"
-	StateWaitingForController State = "waiting_for_controller"
-	StateReady                State = "ready" // Ready for controller to send registration config
-	StateRegisteringRunner    State = "registering_runner"
-	StateIdle                 State = "idle"
-	StateJobRunning           State = "job_running"
-	StateDraining             State = "draining"
-	StateShuttingDown         State = "shutting_down"
-	StateError                State = "error"
+	StateInitializing      State = "initializing"
+	StateConnecting        State = "connecting" // Connecting to controller via gRPC
+	StateReady             State = "ready"      // Connected, waiting for registration config
+	StateRegisteringRunner State = "registering_runner"
+	StateIdle              State = "idle"
+	StateJobRunning        State = "job_running"
+	StateDraining          State = "draining"
+	StateShuttingDown      State = "shutting_down"
+	StateError             State = "error"
 )
 
 // StateMachine manages MIGlet state transitions
@@ -142,8 +142,8 @@ func (sm *StateMachine) executeState() error {
 	switch sm.currentState {
 	case StateInitializing:
 		return sm.handleInitializing()
-	case StateWaitingForController:
-		return sm.handleWaitingForController()
+	case StateConnecting:
+		return sm.handleConnecting()
 	case StateReady:
 		return sm.handleReady()
 	case StateRegisteringRunner:
@@ -206,106 +206,19 @@ func (sm *StateMachine) handleInitializing() error {
 	// Validate prerequisites (Docker, network, etc.)
 	// TODO: Add Docker check, network connectivity check, etc.
 
-	// Transition to waiting for controller
-	sm.Transition(StateWaitingForController)
+	// Transition to connecting state (gRPC only)
+	sm.Transition(StateConnecting)
 	return nil
 }
 
-// handleWaitingForController handles waiting for controller acknowledgment
-// This function sends the VM started event and waits for acknowledgment
-func (sm *StateMachine) handleWaitingForController() error {
+// handleConnecting handles establishing gRPC connection to controller
+// All communication happens via gRPC - no HTTP
+func (sm *StateMachine) handleConnecting() error {
 	log := logger.WithContext(sm.config.VMID, sm.config.PoolID, sm.config.OrgID)
 
-	// If we've already sent the event and are still in this state, just wait
-	// (This shouldn't happen, but protects against edge cases)
-	if sm.vmStartedEventSent {
-		log.Debug("VM started event already sent, waiting for acknowledgment or state transition")
-		select {
-		case <-sm.ctx.Done():
-			return nil
-		case <-time.After(5 * time.Second):
-			// Check if we should still be in this state
-			return nil
-		}
-	}
+	log.Info("Connecting to controller via gRPC")
 
-	// Mark as sent to prevent duplicate sends
-	sm.vmStartedEventSent = true
-
-	// Send VM started event
-	vmStartedEvent := events.NewVMStartedEvent(
-		sm.config.VMID,
-		sm.config.PoolID,
-		sm.config.OrgID,
-	)
-
-	log.Info("Sending VM started event to controller")
-
-	// Send event with retry
-	ackReceived := false
-	maxRetries := sm.config.Controller.Retry.MaxAttempts
-	backoff := sm.config.Controller.Retry.InitialBackoff
-
-	for attempt := 0; attempt < maxRetries && !ackReceived; attempt++ {
-		if attempt > 0 {
-			log.WithField("attempt", attempt+1).Info("Retrying VM started event")
-			select {
-			case <-sm.ctx.Done():
-				return nil
-			case <-time.After(backoff):
-			}
-			// Exponential backoff
-			backoff = time.Duration(float64(backoff) * 1.5)
-			if backoff > sm.config.Controller.Retry.MaxBackoff {
-				backoff = sm.config.Controller.Retry.MaxBackoff
-			}
-		}
-
-		// Send event to controller
-		ackResponse, err := sm.controller.SendVMStartedEvent(sm.ctx, vmStartedEvent)
-		if err != nil {
-			log.WithError(err).WithField("attempt", attempt+1).Warn("Failed to send VM started event")
-			continue
-		}
-
-		if ackResponse != nil && (ackResponse.Acknowledged || ackResponse.Status == "acknowledged" || ackResponse.Status == "received") {
-			log.Info("Controller acknowledged VM started event - MIGlet is ready for registration config")
-			ackReceived = true
-			break
-		}
-	}
-
-	if !ackReceived {
-		log.Error("Failed to get controller acknowledgment after retries")
-		sm.Transition(StateError)
-		return nil // Don't return error, just transition to error state
-	}
-
-	// Initialize gRPC client before transitioning to Ready state
-	// This ensures we're ready to receive commands via gRPC
-	if sm.grpcClient == nil {
-		grpcClient, err := controller.NewGRPCClient(sm.config)
-		if err != nil {
-			log.WithError(err).Warn("Failed to create gRPC client, will retry in Ready state")
-		} else {
-			sm.grpcClient = grpcClient
-			// Don't connect yet - will connect in handleReady
-		}
-	}
-
-	// Transition to ready state - waiting for controller to send registration config
-	log.Info("Controller acknowledgment received, transitioning to ready state - waiting for registration config via gRPC")
-	sm.Transition(StateReady)
-	return nil
-}
-
-// handleReady handles the ready state - using gRPC streaming for commands
-func (sm *StateMachine) handleReady() error {
-	log := logger.WithContext(sm.config.VMID, sm.config.PoolID, sm.config.OrgID)
-
-	log.Info("MIGlet is ready - connecting to controller via gRPC for commands")
-
-	// Initialize gRPC client if not already initialized
+	// Initialize gRPC client
 	if sm.grpcClient == nil {
 		grpcClient, err := controller.NewGRPCClient(sm.config)
 		if err != nil {
@@ -313,17 +226,32 @@ func (sm *StateMachine) handleReady() error {
 			sm.Transition(StateError)
 			return nil
 		}
-
 		sm.grpcClient = grpcClient
+	}
 
-		// Connect to controller
-		if err := sm.grpcClient.Connect(); err != nil {
-			log.WithError(err).Error("Failed to connect to controller via gRPC")
-			sm.Transition(StateError)
-			return nil
-		}
+	// Connect to controller via gRPC
+	if err := sm.grpcClient.Connect(); err != nil {
+		log.WithError(err).Error("Failed to connect to controller via gRPC")
+		sm.Transition(StateError)
+		return nil
+	}
 
-		log.Info("gRPC connection established, waiting for commands")
+	log.Info("gRPC connection established, transitioning to ready state")
+	sm.Transition(StateReady)
+	return nil
+}
+
+// handleReady handles the ready state - waiting for commands via gRPC
+func (sm *StateMachine) handleReady() error {
+	log := logger.WithContext(sm.config.VMID, sm.config.PoolID, sm.config.OrgID)
+
+	log.Info("MIGlet is ready - waiting for commands via gRPC")
+
+	// Verify gRPC client is connected
+	if sm.grpcClient == nil {
+		log.Error("gRPC client not initialized")
+		sm.Transition(StateError)
+		return nil
 	}
 
 	// Listen for commands from gRPC stream

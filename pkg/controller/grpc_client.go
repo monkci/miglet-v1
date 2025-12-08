@@ -17,27 +17,27 @@ import (
 
 // GRPCClient handles gRPC bidirectional streaming with the controller
 type GRPCClient struct {
-	config         *config.Config
-	conn           *grpc.ClientConn
-	client         commands.CommandServiceClient
-	stream         commands.CommandService_StreamCommandsClient
-	mu             sync.RWMutex
-	connected      bool
+	config          *config.Config
+	conn            *grpc.ClientConn
+	client          commands.CommandServiceClient
+	stream          commands.CommandService_StreamCommandsClient
+	mu              sync.RWMutex
+	connected       bool
 	shouldReconnect bool
-	commandCh      chan *commands.Command
-	ctx            context.Context
-	cancel         context.CancelFunc
+	commandCh       chan *commands.Command
+	ctx             context.Context
+	cancel          context.CancelFunc
 }
 
 // NewGRPCClient creates a new gRPC client for command streaming
 func NewGRPCClient(cfg *config.Config) (*GRPCClient, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	client := &GRPCClient{
-		config:         cfg,
-		commandCh:      make(chan *commands.Command, 10),
-		ctx:            ctx,
-		cancel:         cancel,
+		config:          cfg,
+		commandCh:       make(chan *commands.Command, 10),
+		ctx:             ctx,
+		cancel:          cancel,
 		shouldReconnect: true,
 	}
 
@@ -48,14 +48,15 @@ func NewGRPCClient(cfg *config.Config) (*GRPCClient, error) {
 func (c *GRPCClient) Connect() error {
 	log := logger.WithContext(c.config.VMID, c.config.PoolID, c.config.OrgID)
 
-	// Parse endpoint (remove http:// or https://, add port if needed)
-	endpoint := c.config.Controller.Endpoint
-	if endpoint == "" {
-		return fmt.Errorf("controller endpoint not configured")
+	// Get gRPC endpoint from config
+	grpcEndpoint := c.config.Controller.GRPCEndpoint
+	if grpcEndpoint == "" {
+		// Fallback: derive from HTTP endpoint
+		if c.config.Controller.Endpoint == "" {
+			return fmt.Errorf("controller gRPC endpoint not configured")
+		}
+		grpcEndpoint = convertHTTPToGRPC(c.config.Controller.Endpoint)
 	}
-
-	// Convert HTTP endpoint to gRPC endpoint
-	grpcEndpoint := convertHTTPToGRPC(endpoint)
 
 	log.WithField("endpoint", grpcEndpoint).Info("Connecting to controller via gRPC")
 
@@ -106,7 +107,7 @@ func (c *GRPCClient) createStream() (commands.CommandService_StreamCommandsClien
 // streamLoop handles the bidirectional streaming
 func (c *GRPCClient) streamLoop() {
 	log := logger.WithContext(c.config.VMID, c.config.PoolID, c.config.OrgID)
-	
+
 	for {
 		select {
 		case <-c.ctx.Done():
@@ -151,9 +152,9 @@ func (c *GRPCClient) streamLoop() {
 		// Send connect request
 		connectReq := &commands.ConnectRequest{
 			VmId:    c.config.VMID,
-			PoolId:   c.config.PoolID,
-			OrgId:    c.config.OrgID,
-			Version:  "dev", // TODO: Get from build info
+			PoolId:  c.config.PoolID,
+			OrgId:   c.config.OrgID,
+			Version: "dev", // TODO: Get from build info
 		}
 
 		connectMsg := &commands.MIGletMessage{
@@ -216,7 +217,7 @@ func (c *GRPCClient) streamLoop() {
 					"command_id": cmd.Id,
 					"type":       cmd.Type,
 				}).Info("Received command from controller")
-				
+
 				select {
 				case c.commandCh <- cmd:
 				default:
@@ -236,7 +237,7 @@ func (c *GRPCClient) streamLoop() {
 // reconnect attempts to reconnect to the controller
 func (c *GRPCClient) reconnect() error {
 	log := logger.WithContext(c.config.VMID, c.config.PoolID, c.config.OrgID)
-	
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -387,7 +388,7 @@ func convertHTTPToGRPC(endpoint string) string {
 	// For now, assume same host but different port convention
 	// Controller should expose gRPC on a different port (e.g., :50051)
 	// Or use the same port if it supports both HTTP and gRPC
-	
+
 	// For development, if endpoint is localhost:8080, try localhost:50051
 	// In production, this should be configured separately
 	if endpoint == "localhost:8080" || endpoint == "127.0.0.1:8080" {
@@ -398,4 +399,3 @@ func convertHTTPToGRPC(endpoint string) string {
 	// Better: controller should have separate gRPC endpoint config
 	return endpoint
 }
-
