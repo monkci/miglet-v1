@@ -132,6 +132,9 @@ func Load(configPath string) (*Config, error) {
 	if val := os.Getenv("MIGLET_CONTROLLER_ENDPOINT"); val != "" {
 		v.Set("controller.endpoint", val)
 	}
+	if val := os.Getenv("MIGLET_CONTROLLER_GRPC_ENDPOINT"); val != "" {
+		v.Set("controller.grpc_endpoint", val)
+	}
 	if val := os.Getenv("MIGLET_CONTROLLER_AUTH_TYPE"); val != "" {
 		v.Set("controller.auth.type", val)
 	}

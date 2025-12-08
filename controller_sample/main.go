@@ -190,7 +190,7 @@ func handleEvents(w http.ResponseWriter, r *http.Request, vmID string) {
 		orgID, _ := event["org_id"].(string)
 		log.Printf("Acknowledging VM started event - VM: %s, Pool: %s, Org: %s", vmID, poolID, orgID)
 
-			// Mark VM as ready for registration
+		// Mark VM as ready for registration
 		readyVMs[vmID] = true
 		vmRegistrationSent[vmID] = false // Reset flag for this VM
 
