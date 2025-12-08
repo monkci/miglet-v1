@@ -15,7 +15,7 @@ import (
 const (
 	port              = "8080"
 	dataDir           = "./controller_data"
-	registrationToken = "BLDTGML5RBKDKXBWAUS4FLLJG2KXS" // Hardcoded test token
+	registrationToken = "BLDTGMLARLL6HEVWUUQPYWLJG2RCE" // Hardcoded test token
 )
 
 // Track VMs that have sent vm_started events and are ready for registration
