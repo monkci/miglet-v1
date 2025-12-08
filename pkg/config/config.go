@@ -255,12 +255,12 @@ func validate(cfg *Config) error {
 	// if cfg.OrgID == "" {
 	// 	return fmt.Errorf("org_id is required")
 	// }
-	
+
 	// Either gRPC endpoint or HTTP endpoint (for derivation) is required
 	if cfg.Controller.GRPCEndpoint == "" && cfg.Controller.Endpoint == "" {
 		return fmt.Errorf("controller.grpc_endpoint or controller.endpoint is required")
 	}
-	
+
 	// github.org is optional - may be provided later via controller
 	// if cfg.GitHub.Org == "" {
 	// 	return fmt.Errorf("github.org is required")
