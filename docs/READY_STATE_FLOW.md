@@ -94,7 +94,7 @@ Idle (runner ready, waiting for jobs)
       "type": "register_runner",
       "parameters": {
         "registration_token": "AHTXXXXXXXXXXXXXXXXXXXX",
-        "runner_url": "https://github.com/monkci/miglet-v1",
+        "runner_url": "https://github.com/leaffyAdmin/django_repo",
         "runner_group": "default",
         "labels": ["self-hosted", "linux", "x64"],
         "expires_at": "2024-01-15T11:30:00Z"

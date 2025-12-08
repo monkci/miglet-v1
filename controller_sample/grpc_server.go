@@ -35,16 +35,16 @@ type VMConnection struct {
 // GRPCServer implements the CommandService server
 type GRPCServer struct {
 	commands.UnimplementedCommandServiceServer
-	connections map[string]*VMConnection // vmID -> connection
-	mu          sync.RWMutex
+	connections  map[string]*VMConnection // vmID -> connection
+	mu           sync.RWMutex
 	commandQueue map[string][]*commands.Command // vmID -> pending commands
-	queueMu     sync.RWMutex
+	queueMu      sync.RWMutex
 }
 
 // NewGRPCServer creates a new gRPC server
 func NewGRPCServer() *GRPCServer {
 	return &GRPCServer{
-		connections: make(map[string]*VMConnection),
+		connections:  make(map[string]*VMConnection),
 		commandQueue: make(map[string][]*commands.Command),
 	}
 }
@@ -232,7 +232,7 @@ func (s *GRPCServer) sendRegisterRunnerCommand(vmID, poolID, orgID string) {
 		Type: "register_runner",
 		StringParams: map[string]string{
 			"registration_token": registrationToken,
-			"runner_url":         "https://github.com/monkci/miglet-v1",
+			"runner_url":         "https://github.com/leaffyAdmin/django_repo",
 			"runner_group":       "default",
 		},
 		StringArrayParams: []string{"self-hosted", "monkci-miglet-tst1", "linux", "x64"},
@@ -337,4 +337,3 @@ func StartGRPCServer(grpcServer *GRPCServer) error {
 
 	return nil
 }
-

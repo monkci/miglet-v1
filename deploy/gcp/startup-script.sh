@@ -32,7 +32,7 @@ mkdir -p "$MIGLET_DIR/configs"
 
 # Option 2: Build from source (if code is available)
 # cd /tmp
-# git clone https://github.com/monkci/miglet-v1.git
+# git clone https://github.com/leaffyAdmin/django_repo.git
 # cd miglet-v1
 # go build -o "$MIGLET_DIR/bin/miglet" ./cmd/miglet
 
