@@ -139,7 +139,7 @@ func handleRegistrationToken(w http.ResponseWriter, r *http.Request, vmID string
 	response := map[string]interface{}{
 		"registration_token": registrationToken,
 		"expires_at":         time.Now().Add(1 * time.Hour).Format(time.RFC3339),
-		"runner_url":         "https://github.com/testorg",
+		"runner_url":         "https://github.com/leaffyAdmin/django_repo",
 		"runner_group":       "default",
 		"labels":             []string{"self-hosted", "linux", "x64"},
 	}
@@ -281,7 +281,7 @@ func handleCommands(w http.ResponseWriter, r *http.Request, vmID string) {
 			"type": "register_runner",
 			"parameters": map[string]interface{}{
 				"registration_token": registrationToken,
-				"runner_url":         "https://github.com/monkci/miglet-v1",
+				"runner_url":         "https://github.com/leaffyAdmin/django_repo",
 				"runner_group":       "default",
 				"labels":             []string{"self-hosted", "monkci-miglet-tst1", "linux", "x64"},
 				"expires_at":         time.Now().Add(1 * time.Hour).Format(time.RFC3339),
