@@ -115,13 +115,15 @@ func (c *GRPCClient) streamLoop() {
 		default:
 		}
 
-		// Reconnect if needed
+		// Check if we have a connection
 		c.mu.RLock()
 		conn := c.conn
-		shouldReconnect := !c.connected
+		client := c.client
+		stream := c.stream
 		c.mu.RUnlock()
 
-		if shouldReconnect || conn == nil {
+		// Reconnect only if connection is nil (not just because connected is false)
+		if conn == nil || client == nil {
 			if err := c.reconnect(); err != nil {
 				log.WithError(err).Warn("Failed to reconnect, retrying in 5s")
 				time.Sleep(5 * time.Second)
@@ -129,16 +131,16 @@ func (c *GRPCClient) streamLoop() {
 			}
 		}
 
-		// Get or create stream
-		c.mu.RLock()
-		stream := c.stream
-		c.mu.RUnlock()
-
+		// Create stream if needed
 		if stream == nil {
-			// Create new stream
 			newStream, err := c.createStream()
 			if err != nil {
 				log.WithError(err).Warn("Failed to create stream, retrying in 5s")
+				// Mark as needing reconnection
+				c.mu.Lock()
+				c.connected = false
+				c.stream = nil
+				c.mu.Unlock()
 				time.Sleep(5 * time.Second)
 				continue
 			}
@@ -147,6 +149,7 @@ func (c *GRPCClient) streamLoop() {
 			c.stream = newStream
 			c.mu.Unlock()
 			stream = newStream
+			log.Info("gRPC stream created successfully")
 		}
 
 		// Send connect request
