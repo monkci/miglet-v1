@@ -1,0 +1,135 @@
+syntax = "proto3";
+
+package miglet.commands;
+
+option go_package = "github.com/monkci/miglet/proto/commands";
+
+// CommandService provides bidirectional streaming for commands and responses
+service CommandService {
+  // StreamCommands establishes a bidirectional stream for commands
+  // Controller sends commands, MIGlet sends acknowledgments and events
+  rpc StreamCommands(stream MIGletMessage) returns (stream ControllerMessage);
+}
+
+// MIGletMessage represents messages sent from MIGlet to Controller
+message MIGletMessage {
+  oneof message {
+    // Initial connection message
+    ConnectRequest connect = 1;
+    // Command acknowledgment
+    CommandAck command_ack = 2;
+    // Event notification (VM started, job started, etc.)
+    EventNotification event = 3;
+    // Heartbeat with metrics
+    Heartbeat heartbeat = 4;
+    // Error notification
+    ErrorNotification error = 5;
+  }
+}
+
+// ControllerMessage represents messages sent from Controller to MIGlet
+message ControllerMessage {
+  oneof message {
+    // Connection acknowledgment
+    ConnectAck connect_ack = 1;
+    // Command to execute
+    Command command = 2;
+    // Error notification
+    ErrorNotification error = 3;
+  }
+}
+
+// ConnectRequest is sent by MIGlet when establishing connection
+message ConnectRequest {
+  string vm_id = 1;
+  string pool_id = 2;
+  string org_id = 3;
+  string version = 4;
+}
+
+// ConnectAck is sent by Controller to acknowledge connection
+message ConnectAck {
+  bool accepted = 1;
+  string message = 2;
+  string server_version = 3;
+}
+
+// Command represents a command from Controller to MIGlet
+message Command {
+  string id = 1;
+  string type = 2;  // register_runner, drain, shutdown, update_config, set_log_level
+  map<string, string> string_params = 3;
+  map<string, int64> int_params = 4;
+  map<string, bool> bool_params = 5;
+  repeated string string_array_params = 6;  // For labels, etc.
+  int64 created_at = 7;  // Unix timestamp
+}
+
+// CommandAck is sent by MIGlet to acknowledge command processing
+message CommandAck {
+  string command_id = 1;
+  bool success = 2;
+  string message = 3;
+  map<string, string> result = 4;  // Optional result data
+}
+
+// EventNotification represents events from MIGlet
+message EventNotification {
+  string type = 1;  // vm_started, runner_registered, job_started, job_completed, etc.
+  string vm_id = 2;
+  string pool_id = 3;
+  string org_id = 4;
+  map<string, string> data = 5;  // Event-specific data
+  int64 timestamp = 6;
+}
+
+// Heartbeat contains VM health and runner state
+message Heartbeat {
+  string vm_id = 1;
+  string pool_id = 2;
+  string org_id = 3;
+  VMHealth health = 4;
+  RunnerState runner_state = 5;
+  JobInfo current_job = 6;
+  int64 timestamp = 7;
+  string miglet_state = 8;  // MIGlet state machine state: initializing, connecting, ready, registering_runner, idle, job_running, draining, shutting_down, error
+}
+
+// VMHealth contains VM metrics
+message VMHealth {
+  double cpu_usage_percent = 1;
+  double memory_usage_percent = 2;
+  double disk_usage_percent = 3;
+  int64 memory_total_bytes = 4;
+  int64 memory_used_bytes = 5;
+  int64 disk_total_bytes = 6;
+  int64 disk_used_bytes = 7;
+}
+
+// RunnerState contains runner status
+message RunnerState {
+  string state = 1;  // idle, running, offline
+  bool configured = 2;
+  string runner_name = 3;
+  repeated string labels = 4;
+}
+
+// JobInfo contains current job information
+message JobInfo {
+  string job_id = 1;
+  string run_id = 2;
+  string repository = 3;
+  string branch = 4;
+  string commit = 5;
+  string status = 6;  // running, completed, failed
+  int64 started_at = 7;
+}
+
+// ErrorNotification represents errors from either side
+message ErrorNotification {
+  string code = 1;
+  string message = 2;
+  map<string, string> details = 3;
+  int64 timestamp = 4;
+}
+

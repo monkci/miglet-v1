@@ -1,0 +1,183 @@
+# =============================================================================
+# MIG Controller Configuration
+# =============================================================================
+# Copy to controller.yaml and customize for your environment.
+# All values can be overridden via environment variables with CONTROLLER_ prefix.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Server Configuration
+# -----------------------------------------------------------------------------
+server:
+  grpc_port: 50051                    # Port for gRPC server (MIGlet connections)
+  http_port: 8080                     # Port for HTTP server (health checks, metrics)
+  shutdown_timeout: "30s"             # Graceful shutdown timeout
+  max_connection_age: "30m"           # Max gRPC connection age before forcing reconnect
+  keepalive_interval: "10s"           # gRPC keepalive ping interval
+  keepalive_timeout: "3s"             # gRPC keepalive timeout
+  
+  tls:
+    enabled: false                    # Enable TLS for gRPC
+    cert_path: ""                     # Path to TLS certificate
+    key_path: ""                      # Path to TLS private key
+    ca_path: ""                       # Path to CA certificate (for mTLS)
+
+# -----------------------------------------------------------------------------
+# Pool Configuration
+# Identifies which pool/MIG this controller manages
+# -----------------------------------------------------------------------------
+pool:
+  id: "pool-2vcpu-linux-us-central1"  # Unique pool identifier (REQUIRED)
+  name: "2 vCPU Linux Runners"        # Human-readable name
+  type: "2vcpu"                       # Machine type: 2vcpu, 4vcpu, 8vcpu, 16vcpu, custom
+  os: "linux"                         # Operating system: linux, windows
+  arch: "x64"                         # Architecture: x64, arm64
+  region: "us-central1"               # GCP region
+  runner_group: "default"             # GitHub runner group name
+  labels:                             # Default runner labels
+    - "self-hosted"
+    - "linux"
+    - "x64"
+    - "2vcpu"
+
+# -----------------------------------------------------------------------------
+# GCP Configuration
+# -----------------------------------------------------------------------------
+gcp:
+  project_id: "your-gcp-project"      # GCP project ID (REQUIRED)
+  zone: "us-central1-a"               # GCP zone for the MIG (REQUIRED)
+  mig_name: "monkci-runners-2vcpu"    # Managed Instance Group name (REQUIRED)
+  network_project: ""                 # Network project (for Shared VPC, optional)
+  network: "default"                  # VPC network name
+  subnetwork: ""                      # Subnetwork (optional)
+  service_account_path: ""            # Path to SA key (uses default ADC if empty)
+
+# -----------------------------------------------------------------------------
+# GitHub App Configuration
+# Used for generating runner registration tokens
+# -----------------------------------------------------------------------------
+github_app:
+  app_id: 12345                       # GitHub App ID (REQUIRED)
+  private_key_path: "/etc/controller/github-app.pem"  # Path to private key
+  # private_key: |                    # Or set key directly (for K8s secrets)
+  #   -----BEGIN RSA PRIVATE KEY-----
+  #   ...
+  #   -----END RSA PRIVATE KEY-----
+  webhook_secret: ""                  # GitHub webhook secret (optional)
+  base_url: "https://api.github.com"  # GitHub API URL (change for GHES)
+
+# -----------------------------------------------------------------------------
+# Redis Configuration
+# Two separate Redis instances: one for jobs, one for VM status
+# Can be the same instance with different DBs
+# -----------------------------------------------------------------------------
+redis:
+  jobs:
+    host: "redis.internal"            # Redis host for job queue (REQUIRED)
+    port: 6379                        # Redis port
+    password: ""                      # Use CONTROLLER_REDIS_JOBS_PASSWORD env var
+    db: 0                             # Redis database number
+    tls: false                        # Enable TLS
+    max_retries: 3                    # Max retry attempts
+    pool_size: 10                     # Connection pool size
+    min_idle_conns: 2                 # Minimum idle connections
+    connect_timeout: "5s"             # Connection timeout
+    read_timeout: "3s"                # Read timeout
+    write_timeout: "3s"               # Write timeout
+
+  vm_status:
+    host: "redis.internal"            # Redis host for VM status (REQUIRED)
+    port: 6379                        
+    password: ""                      # Use CONTROLLER_REDIS_VM_PASSWORD env var
+    db: 1                             # Different DB from jobs
+    tls: false
+    max_retries: 3
+    pool_size: 10
+    min_idle_conns: 2
+    connect_timeout: "5s"
+    read_timeout: "3s"
+    write_timeout: "3s"
+
+# -----------------------------------------------------------------------------
+# Pub/Sub Configuration
+# For receiving job requests
+# -----------------------------------------------------------------------------
+pubsub:
+  project_id: "your-gcp-project"      # Pub/Sub project (REQUIRED)
+  subscription: "jobs-2vcpu-sub"      # Subscription name (REQUIRED)
+  topic_id: "jobs-events"             # Topic for publishing events (optional)
+  max_outstanding_messages: 100       # Max messages to process concurrently
+  max_outstanding_bytes: 10485760     # Max bytes (10MB)
+  num_goroutines: 10                  # Number of goroutines for processing
+  ack_deadline: "60s"                 # Message acknowledgement deadline
+
+# -----------------------------------------------------------------------------
+# Scheduler Configuration
+# Controls job assignment logic
+# -----------------------------------------------------------------------------
+scheduler:
+  poll_interval: "1s"                 # How often to check for queued jobs
+  assignment_timeout: "5m"            # Max time to wait for VM to become ready
+  max_concurrent_assignments: 10      # Max parallel job assignments
+  retry_interval: "30s"               # Delay between retry attempts
+  max_retries: 3                      # Max retries for failed assignments
+  job_timeout: "6h"                   # Max job duration before timeout
+
+# -----------------------------------------------------------------------------
+# VM Manager Configuration
+# Controls VM lifecycle and scaling
+# -----------------------------------------------------------------------------
+vm_manager:
+  poll_interval: "30s"                # How often to sync with GCloud API
+  heartbeat_timeout: "60s"            # Mark VM unhealthy if no heartbeat
+  max_scale_up_per_minute: 5          # Rate limit for creating new VMs
+  min_ready_vms: 2                    # Warm pool size (always keep N ready)
+  max_vms: 50                         # Hard limit on MIG size
+  idle_timeout: "10m"                 # Stop VM after this idle time
+  boot_timeout: "5m"                  # Max time for VM to boot and connect
+  drain_timeout: "30m"                # Max time to wait for job during drain
+  delete_delay: "1h"                  # Delay before deleting stopped VMs
+  health_check_interval: "1m"         # Health check frequency
+
+# -----------------------------------------------------------------------------
+# MIGlet Configuration
+# Settings for communication with MIGlet agents
+# -----------------------------------------------------------------------------
+miglet:
+  command_timeout: "30s"              # Timeout for commands to MIGlet
+  heartbeat_interval: "15s"           # Expected heartbeat interval
+  reconnect_interval: "5s"            # Delay between reconnect attempts
+  max_reconnect_delay: "5m"           # Max reconnect backoff
+  runner_install_path: "/tmp/miglet-runner"  # Where runner is installed
+  runner_version: "2.329.0"           # GitHub Actions runner version
+
+# -----------------------------------------------------------------------------
+# Logging Configuration
+# -----------------------------------------------------------------------------
+logging:
+  level: "info"                       # Log level: debug, info, warn, error
+  format: "json"                      # Format: json, text
+  output_path: "stdout"               # Output: stdout, stderr, or file path
+  redact_secrets: true                # Redact sensitive values in logs
+
+# -----------------------------------------------------------------------------
+# Metrics Configuration
+# Prometheus metrics endpoint
+# -----------------------------------------------------------------------------
+metrics:
+  enabled: true                       # Enable metrics endpoint
+  port: 9090                          # Metrics port (separate from HTTP)
+  path: "/metrics"                    # Metrics path
+  push_gateway: ""                    # Prometheus PushGateway URL (optional)
+  push_interval: "30s"                # Push interval
+
+# -----------------------------------------------------------------------------
+# Alerts Configuration
+# For critical alerts (optional)
+# -----------------------------------------------------------------------------
+alerts:
+  enabled: false                      # Enable alerting
+  slack_webhook: ""                   # Slack webhook URL
+  pagerduty_key: ""                   # PagerDuty integration key
+  email_recipient: ""                 # Email for alerts
+  alert_cooldown: "5m"                # Cooldown between duplicate alerts
