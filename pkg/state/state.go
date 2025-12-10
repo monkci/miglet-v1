@@ -590,6 +590,7 @@ func (sm *StateMachine) sendHeartbeat() {
 		sm.config.VMID,
 		sm.config.PoolID,
 		sm.config.OrgID,
+		string(sm.currentState), // Include MIGlet state machine state
 		vmHealth,
 		runnerState,
 		currentJob,
@@ -633,6 +634,7 @@ func (sm *StateMachine) sendHeartbeat() {
 			sm.config.VMID,
 			sm.config.PoolID,
 			sm.config.OrgID,
+			string(sm.currentState), // Include MIGlet state machine state
 			protoHealth,
 			protoRunnerState,
 			protoJobInfo,

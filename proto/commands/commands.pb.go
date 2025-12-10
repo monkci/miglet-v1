@@ -646,6 +646,7 @@ type Heartbeat struct {
 	RunnerState   *RunnerState           `protobuf:"bytes,5,opt,name=runner_state,json=runnerState,proto3" json:"runner_state,omitempty"`
 	CurrentJob    *JobInfo               `protobuf:"bytes,6,opt,name=current_job,json=currentJob,proto3" json:"current_job,omitempty"`
 	Timestamp     int64                  `protobuf:"varint,7,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	MigletState   string                 `protobuf:"bytes,8,opt,name=miglet_state,json=migletState,proto3" json:"miglet_state,omitempty"` // MIGlet state machine state: initializing, connecting, ready, registering_runner, idle, job_running, draining, shutting_down, error
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -727,6 +728,13 @@ func (x *Heartbeat) GetTimestamp() int64 {
 		return x.Timestamp
 	}
 	return 0
+}
+
+func (x *Heartbeat) GetMigletState() string {
+	if x != nil {
+		return x.MigletState
+	}
+	return ""
 }
 
 // VMHealth contains VM metrics
@@ -1121,7 +1129,7 @@ const file_proto_commands_proto_rawDesc = "" +
 	"\ttimestamp\x18\x06 \x01(\x03R\ttimestamp\x1a7\n" +
 	"\tDataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x9d\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc0\x02\n" +
 	"\tHeartbeat\x12\x13\n" +
 	"\x05vm_id\x18\x01 \x01(\tR\x04vmId\x12\x17\n" +
 	"\apool_id\x18\x02 \x01(\tR\x06poolId\x12\x15\n" +
@@ -1130,7 +1138,8 @@ const file_proto_commands_proto_rawDesc = "" +
 	"\frunner_state\x18\x05 \x01(\v2\x1c.miglet.commands.RunnerStateR\vrunnerState\x129\n" +
 	"\vcurrent_job\x18\x06 \x01(\v2\x18.miglet.commands.JobInfoR\n" +
 	"currentJob\x12\x1c\n" +
-	"\ttimestamp\x18\a \x01(\x03R\ttimestamp\"\xc2\x02\n" +
+	"\ttimestamp\x18\a \x01(\x03R\ttimestamp\x12!\n" +
+	"\fmiglet_state\x18\b \x01(\tR\vmigletState\"\xc2\x02\n" +
 	"\bVMHealth\x12*\n" +
 	"\x11cpu_usage_percent\x18\x01 \x01(\x01R\x0fcpuUsagePercent\x120\n" +
 	"\x14memory_usage_percent\x18\x02 \x01(\x01R\x12memoryUsagePercent\x12,\n" +

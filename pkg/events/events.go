@@ -141,6 +141,7 @@ func NewJobCompletedEvent(vmID, poolID, orgID, jobID, runID string, success bool
 // HeartbeatEvent represents a heartbeat event with VM and runner state
 type HeartbeatEvent struct {
 	Event
+	MigletState string      `json:"miglet_state"` // MIGlet state machine state
 	VMHealth    VMHealth    `json:"vm_health"`
 	RunnerState RunnerState `json:"runner_state"`
 	CurrentJob  *JobInfo    `json:"current_job,omitempty"`
@@ -174,7 +175,7 @@ type JobInfo struct {
 }
 
 // NewHeartbeatEvent creates a new heartbeat event
-func NewHeartbeatEvent(vmID, poolID, orgID string, vmHealth VMHealth, runnerState RunnerState, currentJob *JobInfo) *HeartbeatEvent {
+func NewHeartbeatEvent(vmID, poolID, orgID, migletState string, vmHealth VMHealth, runnerState RunnerState, currentJob *JobInfo) *HeartbeatEvent {
 	return &HeartbeatEvent{
 		Event: Event{
 			Type:      EventTypeJobHeartbeat,
@@ -184,6 +185,7 @@ func NewHeartbeatEvent(vmID, poolID, orgID string, vmHealth VMHealth, runnerStat
 			OrgID:     orgID,
 			Metadata:  make(map[string]interface{}),
 		},
+		MigletState: migletState,
 		VMHealth:    vmHealth,
 		RunnerState: runnerState,
 		CurrentJob:  currentJob,

@@ -330,7 +330,7 @@ func (c *GRPCClient) SendEvent(eventType, vmID, poolID, orgID string, data map[s
 }
 
 // SendHeartbeat sends a heartbeat to the controller
-func (c *GRPCClient) SendHeartbeat(vmID, poolID, orgID string, health *commands.VMHealth, runnerState *commands.RunnerState, jobInfo *commands.JobInfo) error {
+func (c *GRPCClient) SendHeartbeat(vmID, poolID, orgID, migletState string, health *commands.VMHealth, runnerState *commands.RunnerState, jobInfo *commands.JobInfo) error {
 	c.mu.RLock()
 	stream := c.stream
 	c.mu.RUnlock()
@@ -347,6 +347,7 @@ func (c *GRPCClient) SendHeartbeat(vmID, poolID, orgID string, health *commands.
 		RunnerState: runnerState,
 		CurrentJob:  jobInfo,
 		Timestamp:   time.Now().Unix(),
+		MigletState: migletState,
 	}
 
 	msg := &commands.MIGletMessage{

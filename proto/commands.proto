@@ -92,6 +92,7 @@ message Heartbeat {
   RunnerState runner_state = 5;
   JobInfo current_job = 6;
   int64 timestamp = 7;
+  string miglet_state = 8;  // MIGlet state machine state: initializing, connecting, ready, registering_runner, idle, job_running, draining, shutting_down, error
 }
 
 // VMHealth contains VM metrics
